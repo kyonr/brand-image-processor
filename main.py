@@ -16,24 +16,17 @@ def read_root():
 
 @app.post("/process-images")
 async def process_images(request: Request):
-    form = await request.form()
+    # リクエストボディ（生データ）を直接取得
+    body = await request.body()
     
-    # 送信された単一ファイル（ZIPまたは画像）を取得
-    uploaded_file = None
-    for key in form.keys():
-        uploaded_file = form.get(key)
-        if uploaded_file and hasattr(uploaded_file, "read"):
-            break
-
-    if not uploaded_file:
-        raise HTTPException(status_code=400, detail="ファイルが届いていません")
+    if not body:
+        raise HTTPException(status_code=400, detail="データが届いていません")
     
-    contents = await uploaded_file.read()
     images = []
     
-    # 1. ZIPファイルとして解凍を試みる
+    # 1. ZIPデータとして解凍を試みる
     try:
-        with zipfile.ZipFile(io.BytesIO(contents)) as z:
+        with zipfile.ZipFile(io.BytesIO(body)) as z:
             for filename in z.namelist():
                 if not filename.startswith("__MACOSX") and not filename.startswith("."):
                     img_data = z.read(filename)
@@ -42,14 +35,14 @@ async def process_images(request: Request):
                     except Exception:
                         pass
     except Exception:
-        # 2. ZIPでない場合は単一画像として読み込む
+        # 2. ZIPでない場合は単一画像として試す
         try:
-            images.append(Image.open(io.BytesIO(contents)))
+            images.append(Image.open(io.BytesIO(body)))
         except Exception:
             pass
 
     if not images:
-        raise HTTPException(status_code=400, detail="画像データを解凍・取得できませんでした")
+        raise HTTPException(status_code=400, detail="画像データを読み込めませんでした")
 
     # 3. 露出補正（明るさ+10%）
     processed_images = []
