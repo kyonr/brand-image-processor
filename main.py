@@ -1,5 +1,6 @@
 import io
 import os
+import zipfile
 from fastapi import FastAPI, Request, HTTPException, Response
 from google import genai
 from PIL import Image, ImageEnhance
@@ -15,36 +16,47 @@ def read_root():
 
 @app.post("/process-images")
 async def process_images(request: Request):
-    # 1. 送信されたフォームデータを取得
     form = await request.form()
     
-    images = []
-    # 2. 届いたすべてのキー・データから画像ファイルを自動検出して抽出
+    # 送信された単一ファイル（ZIPまたは画像）を取得
+    uploaded_file = None
     for key in form.keys():
-        items = form.getlist(key)
-        for item in items:
-            if hasattr(item, "read"):
-                contents = await item.read()
-                if contents and len(contents) > 0:
+        uploaded_file = form.get(key)
+        if uploaded_file and hasattr(uploaded_file, "read"):
+            break
+
+    if not uploaded_file:
+        raise HTTPException(status_code=400, detail="ファイルが届いていません")
+    
+    contents = await uploaded_file.read()
+    images = []
+    
+    # 1. ZIPファイルとして解凍を試みる
+    try:
+        with zipfile.ZipFile(io.BytesIO(contents)) as z:
+            for filename in z.namelist():
+                if not filename.startswith("__MACOSX") and not filename.startswith("."):
+                    img_data = z.read(filename)
                     try:
-                        img = Image.open(io.BytesIO(contents))
-                        images.append(img)
+                        images.append(Image.open(io.BytesIO(img_data)))
                     except Exception:
                         pass
+    except Exception:
+        # 2. ZIPでない場合は単一画像として読み込む
+        try:
+            images.append(Image.open(io.BytesIO(contents)))
+        except Exception:
+            pass
 
     if not images:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"画像が受信できませんでした。（受信キー: {list(form.keys())}）"
-        )
+        raise HTTPException(status_code=400, detail="画像データを解凍・取得できませんでした")
 
-    # 3. 露出補正（明るさ調整 +10%）
+    # 3. 露出補正（明るさ+10%）
     processed_images = []
     for img in images:
         img = img.convert("RGB")
         enhancer = ImageEnhance.Brightness(img)
-        img_bright = enhancer.enhance(1.10)
-        processed_images.append(img_bright)
+        processed_images.append(enhancer.enhance(1.10))
 
     # 4. グリッド結合（コラージュ作成）
     collage = create_grid_collage(processed_images)
