@@ -15,35 +15,41 @@ def read_root():
 
 @app.post("/process-images")
 async def process_images(request: Request):
-    # 1. iOSショートカットからのフォームデータを安全に受信
+    # 1. 送信されたフォームデータを取得
     form = await request.form()
-    uploaded_files = form.getlist("files")
-    
-    if not uploaded_files:
-        raise HTTPException(status_code=400, detail="画像が送信されていません")
     
     images = []
-    for file_item in uploaded_files:
-        if hasattr(file_item, "read"):
-            contents = await file_item.read()
-            if contents:
-                images.append(Image.open(io.BytesIO(contents)))
-    
-    if not images:
-        raise HTTPException(status_code=400, detail="有効な画像データが含まれていません")
+    # 2. 届いたすべてのキー・データから画像ファイルを自動検出して抽出
+    for key in form.keys():
+        items = form.getlist(key)
+        for item in items:
+            if hasattr(item, "read"):
+                contents = await item.read()
+                if contents and len(contents) > 0:
+                    try:
+                        img = Image.open(io.BytesIO(contents))
+                        images.append(img)
+                    except Exception:
+                        pass
 
-    # 2. 露出補正（明るさ調整 +10%）
+    if not images:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"画像が受信できませんでした。（受信キー: {list(form.keys())}）"
+        )
+
+    # 3. 露出補正（明るさ調整 +10%）
     processed_images = []
     for img in images:
         img = img.convert("RGB")
         enhancer = ImageEnhance.Brightness(img)
-        img_bright = enhancer.enhance(1.10)  # 明るさ+10%
+        img_bright = enhancer.enhance(1.10)
         processed_images.append(img_bright)
 
-    # 3. 画像のグリッド結合（コラージュ作成）
+    # 4. グリッド結合（コラージュ作成）
     collage = create_grid_collage(processed_images)
     
-    # 4. 完成画像をJPEGバイナリとして返却
+    # 5. 完成画像をJPEGバイナリとして返却
     buf = io.BytesIO()
     collage.save(buf, format="JPEG", quality=95)
     buf.seek(0)
