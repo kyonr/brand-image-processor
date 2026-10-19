@@ -3,7 +3,7 @@ import math
 import os
 import zipfile
 from fastapi import FastAPI, HTTPException, Request, Response
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 app = FastAPI()
 
@@ -14,33 +14,36 @@ def read_root():
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """ガンマ補正で黒い商品（暗部）の質感やシボ感を明るく持ち上げ、背景だけを真っ白にする処理"""
+  """ガンマ補正 ＋ アンシャープマスクで革のシボ感・凹凸・輪郭をパキッと立体的に際立たせる"""
   img = img.convert("RGB")
 
-  # ⚙️ ガンマ値（小さくするほど黒い革の質感・柄が明るく浮き出ます）
-  GAMMA = 0.68
+  # 1. ガンマ補正（0.62で革の暗い質感をしっかりと浮き出させます）
+  GAMMA = 0.62
 
   lut = []
   for i in range(256):
     norm = i / 255.0
-    # 1. ガンマ補正で暗い領域（黒いレザーの質感など）をぐっと明るく持ち上げる
     g_val = math.pow(norm, GAMMA) * 255.0
 
-    # 2. 背景の薄暗い影（ハイライト領域）をすっきり真っ白（255）へ補正
-    if g_val > 170:
+    # 背景の白飛び処理
+    if g_val > 165:
       g_val = 255.0
-    elif g_val > 130:
-      # 130〜170の間を滑らかに255へ繋ぐ
-      ratio = (g_val - 130) / (170 - 130)
-      g_val = 130 + ratio * (255 - 130)
+    elif g_val > 125:
+      ratio = (g_val - 125) / (165 - 125)
+      g_val = 125 + ratio * (255 - 125)
 
     lut.append(min(255, max(0, int(g_val))))
 
   enhanced = img.point(lut * 3)
 
-  # コントラストを微調整して金具や輪郭にメリハリをつける
+  # 2. コントラストの補正（黒を引き締めつつ陰影を作る）
   enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.10)
+  enhanced = enhancer_c.enhance(1.15)
+
+  # 3. アンシャープマスク処理（凹凸・シボ感・金属パーツの輪郭をパキッとシャープ化）
+  enhanced = enhanced.filter(
+      ImageFilter.UnsharpMask(radius=2.0, percent=160, threshold=3)
+  )
 
   return enhanced
 
@@ -127,7 +130,7 @@ async def process_images(request: Request):
   if not images:
     raise HTTPException(status_code=400, detail="画像データを読み込めませんでした")
 
-  # 1. ガンマ補正で黒い商品の質感浮き出し ＆ 背景白飛び
+  # 1. 自動明るさ・輪郭くっきりシャープ化・背景白飛び
   processed_images = [auto_enhance_and_white_background(img) for img in images]
 
   # 2. 自動レイアウト生成
