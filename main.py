@@ -17,31 +17,41 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 @app.get("/")
 def read_root():
   return {
-      "status": "Brand Image Processor API (AI & Flexible Fallback) is running"
+      "status": (
+          "Brand Image Processor API (AI & Ideal Brightness Model) is running"
+      )
   }
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """ガンマ補正 ＋ アンシャープマスクで質感を補正（メモリ節約版）"""
+  """理想の明暗バランス（中間色のトーンアップ＋影の解消＋自然な発色）"""
   img = img.convert("RGB")
-  GAMMA = 0.62
 
+  # 1. 中間階調〜暗部をバランスよく持ち上げるトーンカーブ
   lut = []
   for i in range(256):
-    norm = i / 255.0
-    g_val = math.pow(norm, GAMMA) * 255.0
-    if g_val > 165:
-      g_val = 255.0
-    elif g_val > 125:
-      ratio = (g_val - 125) / (165 - 125)
-      g_val = 125 + ratio * (255 - 125)
-    lut.append(min(255, max(0, int(g_val))))
+    x = i / 255.0
+
+    # 全体的にふんわりと明るくしつつ、影部分をしっかり浮かせる（ガンマ 0.45）
+    y = math.pow(x, 0.45) * 1.18
+
+    val = min(255, max(0, int(y * 255.0)))
+
+    # 背景の白飛ばし（205以上のハイライト領域をすっきり純白にする）
+    if val > 205:
+      val = 255
+
+    lut.append(val)
 
   enhanced = img.point(lut * 3)
-  enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.15)
+
+  # 2. キャメル/ブラウンの温かみを引き出す彩度調整（1.2倍）
+  enhancer_s = ImageEnhance.Color(enhanced)
+  enhanced = enhancer_s.enhance(1.20)
+
+  # 3. 革のシボ感・ステッチを引き締めるシャープネス処理
   return enhanced.filter(
-      ImageFilter.UnsharpMask(radius=1.5, percent=140, threshold=3)
+      ImageFilter.UnsharpMask(radius=1.2, percent=125, threshold=2)
   )
 
 
@@ -54,7 +64,7 @@ def crop_center(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
   )
 
 
-# --- 専門コラージュ生成 ---
+# --- コラージュ生成 ---
 
 
 def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
@@ -150,7 +160,7 @@ def classify_images_with_gemini(images: list[Image.Image]) -> dict:
 
   contents = [prompt]
   for idx, img in enumerate(images):
-    # メモリ死対策: AI判定用は 120x120px の超極小にリサイズ
+    # AI判定用サムネイル
     thumb = img.copy()
     thumb.thumbnail((120, 120))
     contents.append(f"[インデックス: {idx}]")
@@ -164,9 +174,7 @@ def classify_images_with_gemini(images: list[Image.Image]) -> dict:
             response_mime_type="application/json", temperature=0.1
         ),
     )
-    # レスポンス文字列をJSONパース
     text_res = response.text.strip()
-    # 必要に応じてマークダウン ```json ``` を除去
     if text_res.startswith("```"):
       text_res = text_res.split("```")[1]
       if text_res.startswith("json"):
@@ -205,7 +213,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 画像補正（1500pxなので超高速に終わります）
+    # 1. 画像補正（理想の明暗・発色補正）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
     # 2. AI分類
@@ -229,7 +237,6 @@ async def process_images(request: Request):
           get_imgs("inside_full")[0], 1000, 1000
       )
 
-    # 側面・付属品の欠損を考慮したフレキシブルな展開モード
     has_sides = len(get_imgs("sides")) > 0
     has_accessories = len(get_imgs("accessories")) > 0
     flexible_mode = (not has_sides) or (not has_accessories)
@@ -288,9 +295,7 @@ async def process_images(request: Request):
           get_imgs("accessories")[0], 1000, 1000
       )
 
-    # 【🌟重要: タイムアウト/AI仕分け失敗対策】
-    # AI分類が壊れるか1枚も判定できず、かつ出力ファイルが空になった場合は
-    # 「全結合にせず、すべてバラバラの1枚ずつ高画質補正した個別画像」にして返却します。
+    # 【AI仕分け失敗時のフォールバック】
     if not output_files:
       for idx, img in enumerate(enhanced_images):
         output_files[f"{idx+1:02d}_processed_photo.jpg"] = crop_center(
@@ -315,8 +320,6 @@ async def process_images(request: Request):
     )
 
   except Exception as e:
-    # 完全にサーバー側で異常が発生した場合でも、エラー画像をZIPにせず
-    # 補正済みの画像を個別で返す安全網を作成
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
       zf.writestr(
