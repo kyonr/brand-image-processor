@@ -18,40 +18,52 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (AI & Ideal Brightness Model) is running"
+          "Brand Image Processor API (AI & Deep Brown Color Model) is running"
       )
   }
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """理想の明暗バランス（中間色のトーンアップ＋影の解消＋自然な発色）"""
+  """ブラウン・キャメルの深みを極限まで引き出すプロ仕様トーン＆色彩補正"""
   img = img.convert("RGB")
 
-  # 1. 中間階調〜暗部をバランスよく持ち上げるトーンカーブ
+  # 1. 影の救済とブラウンの深み（コク）を両立するトーンカーブ
   lut = []
   for i in range(256):
     x = i / 255.0
 
-    # 全体的にふんわりと明るくしつつ、影部分をしっかり浮かせる（ガンマ 0.45）
-    y = math.pow(x, 0.45) * 1.18
+    # 暗部（影）はしっかり救済し、茶色・キャメル（中間色）は飛ばさず色濃く保持
+    if x < 0.35:
+      y = math.pow(x, 0.50) * 1.10
+    elif x < 0.82:
+      t = (x - 0.35) / (0.82 - 0.35)
+      y_start = math.pow(0.35, 0.50) * 1.10
+      y = y_start + t * (0.88 - y_start)
+    else:
+      t = (x - 0.82) / 0.18
+      y = 0.88 + t * (1.0 - 0.88)
 
     val = min(255, max(0, int(y * 255.0)))
 
-    # 背景の白飛ばし（205以上のハイライト領域をすっきり純白にする）
-    if val > 205:
+    # 背景の白飛ばし（230以上の背景領域のみ純白にし、キャメル地の色飛びを防ぐ）
+    if val > 230:
       val = 255
 
     lut.append(val)
 
   enhanced = img.point(lut * 3)
 
-  # 2. キャメル/ブラウンの温かみを引き出す彩度調整（1.2倍）
+  # 2. キャメル・ブラウンの発色を濃厚に再現（彩度 1.32倍）
   enhancer_s = ImageEnhance.Color(enhanced)
-  enhanced = enhancer_s.enhance(1.20)
+  enhanced = enhancer_s.enhance(1.32)
 
-  # 3. 革のシボ感・ステッチを引き締めるシャープネス処理
+  # 3. 黒コバと茶色のメリハリを引き締める（コントラスト 1.15倍）
+  enhancer_c = ImageEnhance.Contrast(enhanced)
+  enhanced = enhancer_c.enhance(1.15)
+
+  # 4. 革のシボ感・ステッチ・角の立体感をくっきり強調
   return enhanced.filter(
-      ImageFilter.UnsharpMask(radius=1.2, percent=125, threshold=2)
+      ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2)
   )
 
 
@@ -143,7 +155,7 @@ def classify_images_with_gemini(images: list[Image.Image]) -> dict:
 - "accessories": 箱・保存袋・リボン等の付属品写真（1枚）
 
 【出力形式】
-以下のキーを持ったJSONフォーマットのみ（マークダウンの装飾やテキストは一切含めず、純粋なJSONのみを返してください）:
+以下のキーを持ったJSONフォーマットのみ:
 {
   "surface": [0],
   "back": [1],
@@ -160,7 +172,6 @@ def classify_images_with_gemini(images: list[Image.Image]) -> dict:
 
   contents = [prompt]
   for idx, img in enumerate(images):
-    # AI判定用サムネイル
     thumb = img.copy()
     thumb.thumbnail((120, 120))
     contents.append(f"[インデックス: {idx}]")
@@ -213,7 +224,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 画像補正（理想の明暗・発色補正）
+    # 1. 画像補正（深みのある濃密ブラウン補正）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
     # 2. AI分類
@@ -313,7 +324,7 @@ async def process_images(request: Request):
     zip_buf.seek(0)
     return Response(
         content=zip_buf.getvalue(),
-        media_type="application/zip",
+        media_type="attachment; filename=processed_images.zip",
         headers={
             "Content-Disposition": "attachment; filename=processed_images.zip"
         },
@@ -332,4 +343,4 @@ async def process_images(request: Request):
         zf.writestr(f"{idx+1:02d}_backup_photo.jpg", img_buf.getvalue())
 
     zip_buf.seek(0)
-    return Response(content=zip_buf.getvalue(), media_type="application/zip")
+    return Response(content=zip_buf.getvalue(), media_type="attachment; filename=processed_images.zip")
