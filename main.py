@@ -12,7 +12,8 @@ app = FastAPI()
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (Ultra-Fast 10x Speed Model) is running"
+          "Brand Image Processor API (Optimized Exposure & Speed Model) is"
+          " running"
       )
   }
 
@@ -29,9 +30,9 @@ def is_dark_item(img: Image.Image) -> bool:
   return avg_darkness < 95
 
 
-# === 明るさ＆色彩自動補正（超爆速化・超高画質キープ） ===
+# === 明るさ＆色彩自動補正（露出強化＆背景純白化） ===
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  # ★超重要：重いフィルターをかける前に先に軽量化（処理速度を10倍以上に向上）
+  # 軽量化（処理爆速化）
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
 
@@ -41,19 +42,18 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   for i in range(256):
     x = i / 255.0
     if dark_mode:
-      if x < 0.40:
-        y = math.pow(x, 0.92) * 1.02
-      elif x < 0.80:
-        t = (x - 0.40) / (0.80 - 0.40)
-        y_40 = math.pow(0.40, 0.92) * 1.02
-        y = y_40 + t * (0.88 - y_40)
-      elif x < 0.92:
-        t = (x - 0.80) / (0.92 - 0.80)
-        y = 0.88 + math.sin(t * math.pi / 2) * (0.98 - 0.88)
+      # 【黒・暗色系専用：露出をしっかり確保し背景を白く飛ばすカーブ】
+      if x < 0.45:
+        y = math.pow(x, 0.75) * 1.15  # 暗部〜中間部をしっかり持ち上げて視認性UP
+      elif x < 0.85:
+        t = (x - 0.45) / (0.85 - 0.45)
+        y_45 = math.pow(0.45, 0.75) * 1.15
+        y = y_45 + t * (0.96 - y_45)
       else:
-        t = (x - 0.92) / 0.08
-        y = 0.98 + t * 0.02
+        t = (x - 0.85) / 0.15
+        y = 0.96 + t * 0.04  # ハイライト部（背景）を爽やかな白に飛ばす
     else:
+      # 【通常カラー】
       if x < 0.68:
         y = math.pow(x, 0.52) * 1.12
       elif x < 0.92:
@@ -70,18 +70,24 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   enhanced = img.point(lut * 3)
 
   if dark_mode:
+    # 全体明度をさらに1.08倍し、黒の深みと金属パーツのメリハリを強化
+    enhancer_b = ImageEnhance.Brightness(enhanced)
+    enhanced = enhancer_b.enhance(1.08)
+
     enhancer_c = ImageEnhance.Contrast(enhanced)
-    enhanced = enhancer_c.enhance(1.12)
+    enhanced = enhancer_c.enhance(1.10)
+
     enhancer_s = ImageEnhance.Color(enhanced)
-    enhanced = enhancer_s.enhance(1.08)
+    enhanced = enhancer_s.enhance(1.05)
   else:
     enhancer_s = ImageEnhance.Color(enhanced)
     enhanced = enhancer_s.enhance(1.22)
+
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.10)
 
   return enhanced.filter(
-      ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2)
+      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
@@ -191,7 +197,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 全画像補正（10倍爆速化）
+    # 全画像補正
     enhanced = [auto_enhance_and_white_background(img) for img in images]
     out = {}
 
@@ -269,95 +275,4 @@ async def process_images(request: Request):
       if len(enhanced) >= 23:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(22))
 
-    # --- 4. バッグ（ポケット少） ---
-    elif p_type == "bag_small":
-      if len(enhanced) >= 1:
-        out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
-      if len(enhanced) >= 2:
-        out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
-      if len(enhanced) >= 3:
-        out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
-      if len(enhanced) >= 5:
-        out["04_sides_1x2.jpg"] = make_1x4_side_strip(get_slice(3, 5))
-      if len(enhanced) >= 7:
-        out["05_top_bottom_2x1.jpg"] = make_stacked_vertical(get_slice(5, 7))
-      if len(enhanced) >= 11:
-        out["06_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
-      if len(enhanced) >= 13:
-        out["07_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
-      if len(enhanced) >= 14:
-        out["08_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
-      if len(enhanced) >= 16:
-        out["09_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
-      if len(enhanced) >= 17:
-        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(16))
-
-    # --- 5. バッグ（ポケット多） ---
-    elif p_type == "bag_large":
-      if len(enhanced) >= 1:
-        out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
-      if len(enhanced) >= 2:
-        out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
-      if len(enhanced) >= 3:
-        out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
-      if len(enhanced) >= 7:
-        out["04_sides_top_bottom_2x2.jpg"] = make_2x2_grid(get_slice(3, 7))
-      if len(enhanced) >= 11:
-        out["05_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
-      if len(enhanced) >= 13:
-        out["06_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
-      if len(enhanced) >= 14:
-        out["07_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
-      if len(enhanced) >= 16:
-        out["08_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
-      if len(enhanced) >= 20:
-        out["09_pockets_2x2.jpg"] = make_2x2_grid(get_slice(16, 20))
-      if len(enhanced) >= 21:
-        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
-
-    # --- 6. バッグ（フリー）または未知のタイプ ---
-    else:
-      for idx, img in enumerate(enhanced):
-        out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
-
-    if not out:
-      for idx, img in enumerate(enhanced):
-        out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
-
-    # ZIP作成＆返却
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-      for fname, img_obj in out.items():
-        if img_obj:
-          img_buf = io.BytesIO()
-          img_obj.save(img_buf, format="JPEG", quality=95)
-          zf.writestr(fname, img_buf.getvalue())
-
-    zip_buf.seek(0)
-    return Response(
-        content=zip_buf.getvalue(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": "attachment; filename=processed_images.zip"
-        },
-    )
-
-  except Exception as e:
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-      if enhanced:
-        for idx, img in enumerate(enhanced):
-          img_buf = io.BytesIO()
-          img.save(img_buf, format="JPEG", quality=90)
-          zf.writestr(f"{idx+1:02d}_backup.jpg", img_buf.getvalue())
-      else:
-        zf.writestr("error.txt", f"Processing error: {str(e)}")
-
-    zip_buf.seek(0)
-    return Response(
-        content=zip_buf.getvalue(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": "attachment; filename=processed_images.zip"
-        },
-    )
+    # --- 
