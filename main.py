@@ -18,48 +18,45 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (AI & Natural Exposure +35 Model) is"
+          "Brand Image Processor API (AI & Brilliance Anti-Glare Model) is"
           " running"
       )
   }
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """1個前の最高の本体発色コード ＋ iPhoneの「露出+35」自動再現（階調破綻なし）"""
+  """ブリリアンス補正（暗部救済 ＋ ハイライト白飛び防止 ＋ エンボス立体感保持）"""
   img = img.convert("RGB")
 
-  # 1. 前回の完璧だった暗部〜本体のトーンカーブ（不自然な白飛ばし分岐を除去）
+  # iPhoneの「ブリリアンス」を再現するスマートトーンカーブ
   lut = []
   for i in range(256):
     x = i / 255.0
 
-    if x < 0.35:
-      y = math.pow(x, 0.50) * 1.10
+    # 暗部〜中間部(x < 0.75): 影を自然に浮かせて明るく見やすくする
+    # 高輝度部(x >= 0.75): 白飛び・白光り・テカリを強力にブレーキ（ハイライト抑制）
+    if x < 0.75:
+      y = math.pow(x, 0.62) * 1.06
     else:
-      t = (x - 0.35) / (1.0 - 0.35)
-      y_start = math.pow(0.35, 0.50) * 1.10
-      y = y_start + t * (1.0 - y_start)
+      y_75 = math.pow(0.75, 0.62) * 1.06
+      t = (x - 0.75) / 0.25
+      y = y_75 + t * (1.0 - y_75)
 
     val = min(255, max(0, int(y * 255.0)))
     lut.append(val)
 
   enhanced = img.point(lut * 3)
 
-  # 2. iPhone写真アプリの「露出 +35」に相当する自然な明るさアップ (1.18倍)
-  # RGBが均等に引き上がるため、背景に変な色むらやグラデーション崩れが一切起きません
-  enhancer_b = ImageEnhance.Brightness(enhanced)
-  enhanced = enhancer_b.enhance(1.18)
-
-  # 3. キャメル・ブラウンの濃厚なコクとメリハリ（彩度 1.28倍、コントラスト 1.12倍）
+  # 白飛びの原因だった一律の全域Brightnessブーストを廃止し、自然な色彩とコントラストを保持
   enhancer_s = ImageEnhance.Color(enhanced)
-  enhanced = enhancer_s.enhance(1.28)
+  enhanced = enhancer_s.enhance(1.18)  # 赤箱やパステルカラーを鮮やかに保つ
 
   enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.12)
+  enhanced = enhancer_c.enhance(1.08)  # エンボスの凹凸を引き締める
 
-  # 4. ディテールの立体感（シボ感・ステッチ）を微細に強調
+  # レザーのシボ感・エンボスの柄・ステッチの立体感を強調
   return enhanced.filter(
-      ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2)
+      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
@@ -220,7 +217,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 画像補正（完璧な質感 ＋ 自然な露出+35明るさ）
+    # 1. 画像補正（ブリリアンス型 白飛び防止 ＋ 暗部救済）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
     # 2. AI分類
