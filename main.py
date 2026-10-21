@@ -10,12 +10,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-  return {
-      "status": (
-          "Brand Image Processor API (6 Custom Templates & Ultra Color) is"
-          " running"
-      )
-  }
+  return {"status": "Brand Image Processor API is running"}
 
 
 # === 黒・暗色系商品の自動判定関数 ===
@@ -30,7 +25,7 @@ def is_dark_item(img: Image.Image) -> bool:
   return avg_darkness < 95
 
 
-# === 明るさ＆色彩自動補正（全カラー対応 ＋ 深黒補正） ===
+# === 明るさ＆色彩自動補正 ===
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   img = img.convert("RGB")
   dark_mode = is_dark_item(img)
@@ -105,10 +100,6 @@ def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
   return collage
 
 
-def make_1x2_side_strip(images: list[Image.Image]) -> Image.Image:
-  return make_1x4_side_strip(images)
-
-
 def make_4x2_corners_grid(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
@@ -147,7 +138,6 @@ def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
 def make_smart_grid(
     images: list[Image.Image], target_size: int = 1000
 ) -> Image.Image:
-  """【残り全画像用】枚数に合わせて最適枠（2x2, 2x3, 3x3等）で可変結合"""
   if not images:
     return None
   n = len(images)
@@ -178,8 +168,9 @@ def make_smart_grid(
 # === メインAPI ===
 @app.post("/process-images")
 async def process_images(request: Request):
+  enhanced = []
   try:
-    p_type = request.query_params.get("type", "wallet_small")
+    p_type = request.query_params.get("type", "wallet_small").strip()
     body = await request.body()
     if not body:
       raise HTTPException(status_code=400, detail="No data")
@@ -280,7 +271,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 3:
         out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
       if len(enhanced) >= 5:
-        out["04_sides_1x2.jpg"] = make_1x2_side_strip(get_slice(3, 5))
+        out["04_sides_1x2.jpg"] = make_1x4_side_strip(get_slice(3, 5))
       if len(enhanced) >= 7:
         out["05_top_bottom_2x1.jpg"] = make_stacked_vertical(get_slice(5, 7))
       if len(enhanced) >= 11:
@@ -317,8 +308,13 @@ async def process_images(request: Request):
       if len(enhanced) >= 21:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
 
-    # --- 6. バッグ（フリー） ---
-    elif p_type == "bag_free":
+    # --- 6. バッグ（フリー）または未知のタイプ ➔ 単体全出力フォールバック ---
+    else:
+      for idx, img in enumerate(enhanced):
+        out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
+
+    # 万が一出力を生成できなかった場合
+    if not out:
       for idx, img in enumerate(enhanced):
         out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
 
@@ -341,4 +337,22 @@ async def process_images(request: Request):
     )
 
   except Exception as e:
-    raise HTTPException(status_code=500, detail=str(e))
+    # エラーが発生した場合も絶対にJSONにならず単品画像をZIP化して返す
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+      if enhanced:
+        for idx, img in enumerate(enhanced):
+          img_buf = io.BytesIO()
+          img.save(img_buf, format="JPEG", quality=90)
+          zf.writestr(f"{idx+1:02d}_backup.jpg", img_buf.getvalue())
+      else:
+        zf.writestr("error.txt", f"Processing error: {str(e)}")
+
+    zip_buf.seek(0)
+    return Response(
+        content=zip_buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=processed_images.zip"
+        },
+    )
