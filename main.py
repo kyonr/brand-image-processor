@@ -25,7 +25,7 @@ def is_dark_item(img: Image.Image) -> bool:
   return avg_darkness < 95
 
 
-# === 1. 標準補正（4枚目以降：大満足の設定をそのまま適用） ===
+# === 1. 標準補正（5枚目以降：大満足の設定を完全維持） ===
 def enhance_standard(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
@@ -78,7 +78,7 @@ def enhance_standard(img: Image.Image) -> Image.Image:
   )
 
 
-# === 2. 1〜2枚目専用：黒引き締め（白光りカット）＆背景白保持 ===
+# === 2. 1〜2枚目専用：表面・裏面（黒引き締め＆白光りカット） ===
 def enhance_surface(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
@@ -88,7 +88,6 @@ def enhance_surface(img: Image.Image) -> Image.Image:
   for i in range(256):
     x = i / 255.0
     if dark_mode:
-      # テカリ・白光りを抑えて黒を深く保持
       if x < 0.40:
         y = math.pow(x, 0.95) * 0.98
       elif x < 0.80:
@@ -106,7 +105,6 @@ def enhance_surface(img: Image.Image) -> Image.Image:
   enhanced = img.point(lut * 3)
 
   if dark_mode:
-    # コントラストを効かせて黒を引き締める
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.20)
     enhancer_b = ImageEnhance.Brightness(enhanced)
@@ -116,7 +114,7 @@ def enhance_surface(img: Image.Image) -> Image.Image:
   )
 
 
-# === 3. 3枚目（側面）専用：背景純白化強化モード ===
+# === 3. 3枚目専用：側面（背景純白化） ===
 def enhance_side(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
@@ -133,7 +131,6 @@ def enhance_side(img: Image.Image) -> Image.Image:
         y_45 = math.pow(0.45, 0.75) * 1.12
         y = y_45 + t * (0.95 - y_45)
       else:
-        # 背景のグレー部を強力に真っ白に飛ばす
         t = (x - 0.70) / 0.30
         y = 0.95 + t * 0.05
     else:
@@ -148,6 +145,46 @@ def enhance_side(img: Image.Image) -> Image.Image:
     enhanced = enhancer_b.enhance(1.14)
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.15)
+
+  return enhanced.filter(
+      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
+  )
+
+
+# === 4. 4枚目専用：角スレ8箇所（★新設：黒色強化＆背景白保持） ===
+def enhance_corner(img: Image.Image) -> Image.Image:
+  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+  img = img.convert("RGB")
+  dark_mode = is_dark_item(img)
+
+  lut = []
+  for i in range(256):
+    x = i / 255.0
+    if dark_mode:
+      # 暗部〜中間部の黒さを深め、白飛びを防ぐ
+      if x < 0.45:
+        y = math.pow(x, 0.88) * 1.02
+      elif x < 0.75:
+        t = (x - 0.45) / (0.75 - 0.45)
+        y_45 = math.pow(0.45, 0.88) * 1.02
+        y = y_45 + t * (0.95 - y_45)
+      else:
+        # 背景の白さはキープ
+        t = (x - 0.75) / 0.25
+        y = 0.95 + t * 0.05
+    else:
+      y = x
+    val = min(255, max(0, int(y * 255.0)))
+    lut.append(val)
+
+  enhanced = img.point(lut * 3)
+
+  if dark_mode:
+    # コントラストを＋18%強めて黒スレ・革の深みを強調
+    enhancer_c = ImageEnhance.Contrast(enhanced)
+    enhanced = enhancer_c.enhance(1.18)
+    enhancer_b = ImageEnhance.Brightness(enhanced)
+    enhanced = enhancer_b.enhance(1.02)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -260,14 +297,16 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # ★枚数・用途に応じた個別最適化処理★
+    # ★用途に応じた完全個別処理★
     enhanced = []
     for idx, img in enumerate(images):
-      if idx in [0, 1]:  # 1・2枚目（表面・裏面）➔ 黒引き締め＆テカリカット
+      if idx in [0, 1]:  # 1・2枚目（表面・裏面）
         enhanced.append(enhance_surface(img))
-      elif 2 <= idx <= 5:  # 3枚目（側面4方向）➔ 背景強力白飛ばし
+      elif 2 <= idx <= 5:  # 3枚目（側面4方向）
         enhanced.append(enhance_side(img))
-      else:  # 4枚目以降 ➔ 高評価の標準パラメータを維持
+      elif 6 <= idx <= 13:  # 4枚目（角スレ8箇所）➔ 黒色強化モード
+        enhanced.append(enhance_corner(img))
+      else:  # 5枚目以降 ➔ 大満足の標準パラメータを完全維持
         enhanced.append(enhance_standard(img))
 
     out = {}
