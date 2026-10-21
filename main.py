@@ -13,6 +13,11 @@ def read_root():
   return {"status": "Brand Image Processor API is running"}
 
 
+# === 仕切り線・外枠の太さ設定（ピクセル単位） ===
+MARGIN = 6  # 画像全体の周囲の白枠
+GAP = 6  # 写真同士の間の白仕切り線
+
+
 # === 黒・暗色系商品の自動判定関数 ===
 def is_dark_item(img: Image.Image) -> bool:
   w, h = img.size
@@ -25,7 +30,7 @@ def is_dark_item(img: Image.Image) -> bool:
   return avg_darkness < 95
 
 
-# === 1. 標準補正（5枚目以降：大満足の設定を完全維持） ===
+# === 1. 標準補正（5枚目以降：内側・ポケット・金具用） ===
 def enhance_standard(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
@@ -109,6 +114,7 @@ def enhance_surface(img: Image.Image) -> Image.Image:
     enhanced = enhancer_c.enhance(1.20)
     enhancer_b = ImageEnhance.Brightness(enhanced)
     enhanced = enhancer_b.enhance(1.02)
+
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
@@ -151,7 +157,7 @@ def enhance_side(img: Image.Image) -> Image.Image:
   )
 
 
-# === 4. 4枚目専用：角スレ8箇所（★新設：黒色強化＆背景白保持） ===
+# === 4. 4枚目専用：角スレ8箇所（黒色強化＆背景白保持） ===
 def enhance_corner(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
@@ -161,7 +167,6 @@ def enhance_corner(img: Image.Image) -> Image.Image:
   for i in range(256):
     x = i / 255.0
     if dark_mode:
-      # 暗部〜中間部の黒さを深め、白飛びを防ぐ
       if x < 0.45:
         y = math.pow(x, 0.88) * 1.02
       elif x < 0.75:
@@ -169,7 +174,6 @@ def enhance_corner(img: Image.Image) -> Image.Image:
         y_45 = math.pow(0.45, 0.88) * 1.02
         y = y_45 + t * (0.95 - y_45)
       else:
-        # 背景の白さはキープ
         t = (x - 0.75) / 0.25
         y = 0.95 + t * 0.05
     else:
@@ -180,7 +184,6 @@ def enhance_corner(img: Image.Image) -> Image.Image:
   enhanced = img.point(lut * 3)
 
   if dark_mode:
-    # コントラストを＋18%強めて黒スレ・革の深みを強調
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.18)
     enhancer_b = ImageEnhance.Brightness(enhanced)
@@ -200,16 +203,18 @@ def crop_center(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
   )
 
 
-# === レイアウト作成パーツ群 ===
+# === レイアウト作成パーツ群（★白仕切り線＆外枠付き★） ===
 def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
   n = len(images)
-  cell_w = 1000 // n
-  cell_h = 1000
+  cell_w = (1000 - MARGIN * 2 - GAP * (n - 1)) // n
+  cell_h = 1000 - MARGIN * 2
   collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
   for idx, img in enumerate(images):
-    collage.paste(crop_center(img, cell_w, cell_h), (idx * cell_w, 0))
+    x = MARGIN + idx * (cell_w + GAP)
+    y = MARGIN
+    collage.paste(crop_center(img, cell_w, cell_h), (x, y))
   return collage
 
 
@@ -217,11 +222,14 @@ def make_4x2_corners_grid(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
   cols, rows = 2, 4
-  cell_w, cell_h = 500, 250
+  cell_w = (1000 - MARGIN * 2 - GAP * (cols - 1)) // cols
+  cell_h = (1000 - MARGIN * 2 - GAP * (rows - 1)) // rows
   collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
   for idx, img in enumerate(images[:8]):
     r, c = idx // cols, idx % cols
-    collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
+    x = MARGIN + c * (cell_w + GAP)
+    y = MARGIN + r * (cell_h + GAP)
+    collage.paste(crop_center(img, cell_w, cell_h), (x, y))
   return collage
 
 
@@ -229,11 +237,14 @@ def make_2x2_grid(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
   cols, rows = 2, 2
-  cell_w, cell_h = 500, 500
+  cell_w = (1000 - MARGIN * 2 - GAP * (cols - 1)) // cols
+  cell_h = (1000 - MARGIN * 2 - GAP * (rows - 1)) // rows
   collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
   for idx, img in enumerate(images[:4]):
     r, c = idx // cols, idx % cols
-    collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
+    x = MARGIN + c * (cell_w + GAP)
+    y = MARGIN + r * (cell_h + GAP)
+    collage.paste(crop_center(img, cell_w, cell_h), (x, y))
   return collage
 
 
@@ -241,10 +252,13 @@ def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
   n = len(images)
-  cell_w, cell_h = 1000, 1000 // n
+  cell_w = 1000 - MARGIN * 2
+  cell_h = (1000 - MARGIN * 2 - GAP * (n - 1)) // n
   collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
   for idx, img in enumerate(images):
-    collage.paste(crop_center(img, cell_w, cell_h), (0, idx * cell_h))
+    x = MARGIN
+    y = MARGIN + idx * (cell_h + GAP)
+    collage.paste(crop_center(img, cell_w, cell_h), (x, y))
   return collage
 
 
@@ -268,13 +282,15 @@ def make_smart_grid(
   else:
     cols, rows = 4, (n + 3) // 4
 
-  cell_w = target_size // cols
-  cell_h = target_size // rows
+  cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
+  cell_h = (target_size - MARGIN * 2 - GAP * (rows - 1)) // rows
 
   collage = Image.new("RGB", (target_size, target_size), (255, 255, 255))
   for idx, img in enumerate(images):
     r, c = idx // cols, idx % cols
-    collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
+    x = MARGIN + c * (cell_w + GAP)
+    y = MARGIN + r * (cell_h + GAP)
+    collage.paste(crop_center(img, cell_w, cell_h), (x, y))
   return collage
 
 
@@ -297,16 +313,16 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # ★用途に応じた完全個別処理★
+    # 用途に応じた個別処理
     enhanced = []
     for idx, img in enumerate(images):
       if idx in [0, 1]:  # 1・2枚目（表面・裏面）
         enhanced.append(enhance_surface(img))
       elif 2 <= idx <= 5:  # 3枚目（側面4方向）
         enhanced.append(enhance_side(img))
-      elif 6 <= idx <= 13:  # 4枚目（角スレ8箇所）➔ 黒色強化モード
+      elif 6 <= idx <= 13:  # 4枚目（角スレ8箇所）
         enhanced.append(enhance_corner(img))
-      else:  # 5枚目以降 ➔ 大満足の標準パラメータを完全維持
+      else:  # 5枚目以降（標準補正）
         enhanced.append(enhance_standard(img))
 
     out = {}
