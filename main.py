@@ -25,11 +25,10 @@ def is_dark_item(img: Image.Image) -> bool:
   return avg_darkness < 95
 
 
-# === 明るさ＆色彩自動補正（露出強化＆背景純白化） ===
-def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
+# === 1. 標準補正（4枚目以降：大満足の設定をそのまま適用） ===
+def enhance_standard(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
-
   dark_mode = is_dark_item(img)
 
   lut = []
@@ -73,6 +72,82 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
     enhanced = enhancer_s.enhance(1.22)
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.10)
+
+  return enhanced.filter(
+      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
+  )
+
+
+# === 2. 1〜2枚目専用：黒引き締め（白光りカット）＆背景白保持 ===
+def enhance_surface(img: Image.Image) -> Image.Image:
+  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+  img = img.convert("RGB")
+  dark_mode = is_dark_item(img)
+
+  lut = []
+  for i in range(256):
+    x = i / 255.0
+    if dark_mode:
+      # テカリ・白光りを抑えて黒を深く保持
+      if x < 0.40:
+        y = math.pow(x, 0.95) * 0.98
+      elif x < 0.80:
+        t = (x - 0.40) / (0.80 - 0.40)
+        y_40 = math.pow(0.40, 0.95) * 0.98
+        y = y_40 + t * (0.95 - y_40)
+      else:
+        t = (x - 0.80) / 0.20
+        y = 0.95 + t * 0.05
+    else:
+      y = x
+    val = min(255, max(0, int(y * 255.0)))
+    lut.append(val)
+
+  enhanced = img.point(lut * 3)
+
+  if dark_mode:
+    # コントラストを効かせて黒を引き締める
+    enhancer_c = ImageEnhance.Contrast(enhanced)
+    enhanced = enhancer_c.enhance(1.20)
+    enhancer_b = ImageEnhance.Brightness(enhanced)
+    enhanced = enhancer_b.enhance(1.02)
+  return enhanced.filter(
+      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
+  )
+
+
+# === 3. 3枚目（側面）専用：背景純白化強化モード ===
+def enhance_side(img: Image.Image) -> Image.Image:
+  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+  img = img.convert("RGB")
+  dark_mode = is_dark_item(img)
+
+  lut = []
+  for i in range(256):
+    x = i / 255.0
+    if dark_mode:
+      if x < 0.45:
+        y = math.pow(x, 0.75) * 1.12
+      elif x < 0.70:
+        t = (x - 0.45) / (0.70 - 0.45)
+        y_45 = math.pow(0.45, 0.75) * 1.12
+        y = y_45 + t * (0.95 - y_45)
+      else:
+        # 背景のグレー部を強力に真っ白に飛ばす
+        t = (x - 0.70) / 0.30
+        y = 0.95 + t * 0.05
+    else:
+      y = x
+    val = min(255, max(0, int(y * 255.0)))
+    lut.append(val)
+
+  enhanced = img.point(lut * 3)
+
+  if dark_mode:
+    enhancer_b = ImageEnhance.Brightness(enhanced)
+    enhanced = enhancer_b.enhance(1.14)
+    enhancer_c = ImageEnhance.Contrast(enhanced)
+    enhanced = enhancer_c.enhance(1.15)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -185,7 +260,16 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    enhanced = [auto_enhance_and_white_background(img) for img in images]
+    # ★枚数・用途に応じた個別最適化処理★
+    enhanced = []
+    for idx, img in enumerate(images):
+      if idx in [0, 1]:  # 1・2枚目（表面・裏面）➔ 黒引き締め＆テカリカット
+        enhanced.append(enhance_surface(img))
+      elif 2 <= idx <= 5:  # 3枚目（側面4方向）➔ 背景強力白飛ばし
+        enhanced.append(enhance_side(img))
+      else:  # 4枚目以降 ➔ 高評価の標準パラメータを維持
+        enhanced.append(enhance_standard(img))
+
     out = {}
 
     def get_slice(start, end=None):
@@ -193,6 +277,7 @@ async def process_images(request: Request):
         return enhanced[start:]
       return enhanced[start:end]
 
+    # --- 1. 財布（ポケット少） ---
     if p_type == "wallet_small":
       if len(enhanced) >= 1:
         out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
@@ -215,6 +300,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 20:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(19))
 
+    # --- 2. 財布（ポケット中） ---
     elif p_type == "wallet_medium":
       if len(enhanced) >= 1:
         out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
@@ -237,6 +323,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 21:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
 
+    # --- 3. 財布（ポケット多） ---
     elif p_type == "wallet_large":
       if len(enhanced) >= 1:
         out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
@@ -259,6 +346,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 23:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(22))
 
+    # --- 4. バッグ（ポケット少） ---
     elif p_type == "bag_small":
       if len(enhanced) >= 1:
         out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
@@ -281,6 +369,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 17:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(16))
 
+    # --- 5. バッグ（ポケット多） ---
     elif p_type == "bag_large":
       if len(enhanced) >= 1:
         out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
@@ -303,6 +392,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 21:
         out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
 
+    # --- 6. フリー ---
     else:
       for idx, img in enumerate(enhanced):
         out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
@@ -333,4 +423,17 @@ async def process_images(request: Request):
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
       if enhanced:
         for idx, img in enumerate(enhanced):
-          img
+          img_buf = io.BytesIO()
+          img.save(img_buf, format="JPEG", quality=90)
+          zf.writestr(f"{idx+1:02d}_backup.jpg", img_buf.getvalue())
+      else:
+        zf.writestr("error.txt", f"Processing error: {str(e)}")
+
+    zip_buf.seek(0)
+    return Response(
+        content=zip_buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": "attachment; filename=processed_images.zip"
+        },
+    )
