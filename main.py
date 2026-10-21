@@ -6,7 +6,7 @@ import zipfile
 from fastapi import FastAPI, HTTPException, Request, Response
 from google import genai
 from google.genai import types
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 app = FastAPI()
 
@@ -18,54 +18,55 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (Auto Black Detection & Brilliance"
-          " Model) is running"
+          "Brand Image Processor API (Perfect Black Tone & Dedicated Grid"
+          " Collage) is running"
       )
   }
 
 
-# === 黒系商品の自動判定関数 ===
-def is_black_item(img: Image.Image) -> bool:
-  """商品本体が黒・ダーク系かどうかを自動判別"""
-  # 画像中央エリア（商品が存在する部分）を抽出
+# === 黒・暗色系商品の自動判定関数 ===
+def is_dark_item(img: Image.Image) -> bool:
+  """商品本体が黒・紺・ダークブラウン等か自動判定"""
   w, h = img.size
-  crop_area = img.crop((int(w * 0.2), int(h * 0.2), int(w * 0.8), int(h * 0.8)))
-
-  # 背景の白（輝度200以上）を除外した「商品領域」の平均輝度を測定
+  crop_area = img.crop((int(w * 0.25), int(h * 0.25), int(w * 0.75), int(h * 0.75)))
   gray = crop_area.convert("L")
+
+  # 背景の白（輝度210以上）を除外した「商品領域」の画素を取り出す
   pixels = [p for p in list(gray.getdata()) if p < 210]
 
   if not pixels:
     return False
 
   avg_darkness = sum(pixels) / len(pixels)
-  # 平均輝度が低い（暗い）場合は黒系アイテムと判断
-  return avg_darkness < 85
+  return avg_darkness < 75
 
 
-# === 1. 明るさ＆色彩補正（黒自動検出機能付き） ===
+# === 1. 明るさ＆色彩補正（全カラー万能 ＋ 黒・暗色系専用トーンカーブ） ===
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   img = img.convert("RGB")
-  is_black = is_black_item(img)
+  dark_mode = is_dark_item(img)
 
   lut = []
   for i in range(256):
     x = i / 255.0
 
-    if is_black:
-      # 【黒系商品専用のトーンカーブ】
-      # 暗部はしっかり見せつつ、テカリ・白光りを防ぐためにハイライト領域を少し抑える（ブリリアンスマイナス効果）
-      if x < 0.60:
-        y = math.pow(x, 0.55) * 1.08
-      elif x < 0.88:
-        t = (x - 0.60) / (0.88 - 0.60)
-        y_60 = math.pow(0.60, 0.55) * 1.08
-        y = y_60 + t * (0.94 - y_60)
+    if dark_mode:
+      # 【黒・紺・ダークカラー専用トーンカーブ】
+      # 黒色を深く保ち、白光りを防ぎつつ背景だけをすっきり白くする
+      if x < 0.30:
+        y = math.pow(x, 1.05) * 0.95
+      elif x < 0.70:
+        t = (x - 0.30) / (0.70 - 0.30)
+        y_30 = math.pow(0.30, 1.05) * 0.95
+        y = y_30 + t * (0.82 - y_30)
+      elif x < 0.92:
+        t = (x - 0.70) / (0.92 - 0.70)
+        y = 0.82 + math.sin(t * math.pi / 2) * (0.98 - 0.82)
       else:
-        t = (x - 0.88) / 0.12
-        y = 0.94 + t * 0.06
+        t = (x - 0.92) / 0.08
+        y = 0.98 + t * 0.02
     else:
-      # 【通常カラー用（パステル・ブラウン・ベージュ用）従来通りの最高の計算式】
+      # 【通常カラー（パステル・ブラウン・ベージュ等）高評価獲得済みの設定】
       if x < 0.68:
         y = math.pow(x, 0.52) * 1.12
       elif x < 0.92:
@@ -81,18 +82,16 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
 
   enhanced = img.point(lut * 3)
 
-  if is_black:
-    # 黒アイテム：コントラストを強め（1.18倍）にして黒を引き締め、白光りを抑える
+  if dark_mode:
+    # 黒系：コントラストを高めて（1.22倍）深い黒とシャープな質感を両立
     enhancer_c = ImageEnhance.Contrast(enhanced)
-    enhanced = enhancer_c.enhance(1.18)
-
+    enhanced = enhancer_c.enhance(1.22)
     enhancer_s = ImageEnhance.Color(enhanced)
-    enhanced = enhancer_s.enhance(1.15)
+    enhanced = enhancer_s.enhance(1.05)
   else:
-    # 通常カラー：従来の完璧な設定
+    # 通常カラー：高評価の色彩＆コントラスト
     enhancer_s = ImageEnhance.Color(enhanced)
     enhanced = enhancer_s.enhance(1.22)
-
     enhancer_c = ImageEnhance.Contrast(enhanced)
     enhanced = enhancer_c.enhance(1.10)
 
@@ -110,8 +109,11 @@ def crop_center(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
   )
 
 
-# === 2. スマート・コラージュレイアウトエンジン ===
+# === 2. 理想のレイアウト生成エンジン ===
+
+
 def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
+  """側面用：1000x1000正方形キャンバスに縦長写真を横一列に並べる（image_59.png と完全一致）"""
   if not images:
     return None
   n = len(images)
@@ -126,9 +128,10 @@ def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
   return collage
 
 
-def make_smart_grid(
+def make_corners_2x4_grid(
     images: list[Image.Image], target_size: int = 1000
 ) -> Image.Image:
+  """角スレ・詳細パーツ用：4列x2行 (2x4) レイアウト（image_60.png と完全一致）"""
   if not images:
     return None
   n = len(images)
@@ -141,16 +144,15 @@ def make_smart_grid(
     cols, rows = 2, 2
   elif n <= 6:
     cols, rows = 3, 2
-  elif n <= 9:
-    cols, rows = 3, 3
   else:
-    cols, rows = 4, (n + 3) // 4
+    # 7〜8枚（およびそれ以上）：絶対 4列×2行（上4枚・下4枚）
+    cols, rows = 4, 2
 
   cell_w = target_size // cols
   cell_h = target_size // rows
 
   collage = Image.new("RGB", (target_size, target_size), (255, 255, 255))
-  for idx, img in enumerate(images):
+  for idx, img in enumerate(images[: cols * rows]):
     r, c = idx // cols, idx % cols
     collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
   return collage
@@ -250,101 +252,78 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 自動判別付きの補正を全画像に適用
+    # 1. 自動カラー補正（黒・紺引き締めモード含む）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
-    # 2. AI分類
-    cls = classify_images_with_gemini(enhanced_images)
+    # 2. 画像のアスペクト比（縦横比）で確実に側面と角を分離！
+    portrait_sides = []  # 縦長写真 ➔ 1x4側面結合用
+    square_corners = []  # 四角・横長写真 ➔ 2x4角スレ結合用
+
+    for img in enhanced_images:
+      w, h = img.size
+      if h > w * 1.08:  # 縦長ショット
+        portrait_sides.append(img)
+      else:  # 四角・角ショット
+        square_corners.append(img)
 
     output_files = {}
 
-    def get_imgs_guarded(key, want_portrait=False):
+    # 3. AI判定も組み合わせて結合を生成
+    cls = classify_images_with_gemini(enhanced_images)
+
+    def get_imgs_by_key(key):
       indices = cls.get(key, [])
-      res = []
-      for i in indices:
-        if i < len(enhanced_images):
-          img = enhanced_images[i]
-          w, h = img.size
-          is_portrait = h > w * 1.12
-          if want_portrait and is_portrait:
-            res.append(img)
-          elif not want_portrait and not is_portrait:
-            res.append(img)
-      return res
+      return [enhanced_images[i] for i in indices if i < len(enhanced_images)]
 
-    # メイン写真
-    if get_imgs_guarded("surface"):
+    # メイン単体写真
+    if get_imgs_by_key("surface"):
       output_files["01_surface.jpg"] = crop_center(
-          get_imgs_guarded("surface")[0], 1000, 1000
+          get_imgs_by_key("surface")[0], 1000, 1000
       )
-    if get_imgs_guarded("back"):
+    if get_imgs_by_key("back"):
       output_files["02_back.jpg"] = crop_center(
-          get_imgs_guarded("back")[0], 1000, 1000
+          get_imgs_by_key("back")[0], 1000, 1000
       )
-    if get_imgs_guarded("inside_full"):
+    if get_imgs_by_key("inside_full"):
       output_files["03_inside_full.jpg"] = crop_center(
-          get_imgs_guarded("inside_full")[0], 1000, 1000
+          get_imgs_by_key("inside_full")[0], 1000, 1000
       )
 
-    # ⑥ 側面
-    side_imgs = get_imgs_guarded("sides", want_portrait=True)
-    if side_imgs:
-      output_files["06_sides_1x4.jpg"] = make_1x4_side_strip(side_imgs)
+    # 側面（縦長ショット） ➔ 必ず 1x4 の横一列ストリップ画像（image_59.png）に結合！
+    if portrait_sides:
+      output_files["06_sides_1x4.jpg"] = make_1x4_side_strip(portrait_sides)
 
-    # ⑧ 角スレ＆詳細パーツ統合
-    corner_imgs = get_imgs_guarded("corners", want_portrait=False)
-    hardware_imgs = get_imgs_guarded("hardware_logo", want_portrait=False)
-    all_square_detail_imgs = corner_imgs + hardware_imgs
-
-    if all_square_detail_imgs:
-      if len(all_square_detail_imgs) <= 8:
-        output_files["08_corners_combined.jpg"] = make_smart_grid(
-            all_square_detail_imgs
-        )
-      else:
-        if corner_imgs:
-          output_files["08_corners_combined.jpg"] = make_smart_grid(
-              corner_imgs
-          )
-        if hardware_imgs:
-          output_files["09_hardware_logo_combined.jpg"] = make_smart_grid(
-              hardware_imgs
-          )
-
-    # その他パーツ
-    if get_imgs_guarded("coin_bill"):
-      output_files["04_coin_bill_combined.jpg"] = make_smart_grid(
-          get_imgs_guarded("coin_bill")
+    # 角・詳細パーツ（四角ショット） ➔ 必ず 2x4 (4列2行) グリッド画像（image_60.png）に結合！
+    if square_corners:
+      main_used = (
+          get_imgs_by_key("surface")
+          + get_imgs_by_key("back")
+          + get_imgs_by_key("inside_full")
       )
-    if get_imgs_guarded("pockets"):
+      corners_to_combine = [
+          img for img in square_corners if img not in main_used
+      ]
+
+      if not corners_to_combine:
+        corners_to_combine = square_corners
+
+      output_files["08_corners_2x4.jpg"] = make_corners_2x4_grid(
+          corners_to_combine
+      )
+
+    # その他内部パーツ
+    if get_imgs_by_key("coin_bill"):
+      output_files["04_coin_bill_combined.jpg"] = make_corners_2x4_grid(
+          get_imgs_by_key("coin_bill")
+      )
+    if get_imgs_by_key("pockets"):
       output_files["05_pockets_combined.jpg"] = make_stacked_vertical(
-          get_imgs_guarded("pockets")
+          get_imgs_by_key("pockets")
       )
-    if get_imgs_guarded("accessories"):
+    if get_imgs_by_key("accessories"):
       output_files["10_accessories.jpg"] = crop_center(
-          get_imgs_guarded("accessories")[0], 1000, 1000
+          get_imgs_by_key("accessories")[0], 1000, 1000
       )
-
-    # スマートフォールバック
-    if not output_files:
-      sides_list = []
-      corners_list = []
-
-      for img in enhanced_images:
-        w, h = img.size
-        if h > w * 1.12:
-          sides_list.append(img)
-        else:
-          corners_list.append(img)
-
-      if sides_list:
-        output_files["06_sides_combined.jpg"] = make_1x4_side_strip(
-            sides_list
-        )
-      if corners_list:
-        output_files["08_corners_combined.jpg"] = make_smart_grid(
-            corners_list
-        )
 
     # 4. ZIP圧縮＆返却
     zip_buf = io.BytesIO()
