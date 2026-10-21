@@ -18,50 +18,52 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (AI & Deep Brown Color Model) is running"
+          "Brand Image Processor API (AI & Natural Body Pure White BG Model) is"
+          " running"
       )
   }
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """ブラウン・キャメルの深みを極限まで引き出すプロ仕様トーン＆色彩補正"""
+  """商品本体の自然な色味・質感は100%保持し、背景のグレーだけを爽やかな純白にする補正"""
   img = img.convert("RGB")
 
-  # 1. 影の救済とブラウンの深み（コク）を両立するトーンカーブ
+  # 1. 本体（中間色）の色味を完璧に保ちつつ、背景領域（ハイライト）のみ純白化するカーブ
   lut = []
   for i in range(256):
     x = i / 255.0
 
-    # 暗部（影）はしっかり救済し、茶色・キャメル（中間色）は飛ばさず色濃く保持
     if x < 0.35:
+      # 暗部（影）の救済
       y = math.pow(x, 0.50) * 1.10
-    elif x < 0.82:
-      t = (x - 0.35) / (0.82 - 0.35)
+    elif x < 0.72:
+      # 商品本体（キャメル・ブラウン）の中間色は現在の最高のバランスを完璧にキープ
+      t = (x - 0.35) / (0.72 - 0.35)
       y_start = math.pow(0.35, 0.50) * 1.10
-      y = y_start + t * (0.88 - y_start)
+      y = y_start + t * (0.86 - y_start)
     else:
-      t = (x - 0.82) / 0.18
-      y = 0.88 + t * (1.0 - 0.88)
+      # 背景の薄グレー領域をスムーズに純白（1.0）へ収束させる
+      t = (x - 0.72) / (1.0 - 0.72)
+      y = 0.86 + math.sin(t * math.pi / 2) * (1.0 - 0.86)
 
     val = min(255, max(0, int(y * 255.0)))
 
-    # 背景の白飛ばし（230以上の背景領域のみ純白にし、キャメル地の色飛びを防ぐ）
-    if val > 230:
+    # 背景領域を抜いてパッと明るい純白「255」にする（本体の色飛びを防ぐ絶妙な閾値）
+    if val > 218:
       val = 255
 
     lut.append(val)
 
   enhanced = img.point(lut * 3)
 
-  # 2. キャメル・ブラウンの発色を濃厚に再現（彩度 1.32倍）
+  # 2. 自然で好評価だった彩度・コントラストのバランスをそのまま維持
   enhancer_s = ImageEnhance.Color(enhanced)
-  enhanced = enhancer_s.enhance(1.32)
+  enhanced = enhancer_s.enhance(1.30)
 
-  # 3. 黒コバと茶色のメリハリを引き締める（コントラスト 1.15倍）
   enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.15)
+  enhanced = enhancer_c.enhance(1.12)
 
-  # 4. 革のシボ感・ステッチ・角の立体感をくっきり強調
+  # 3. 革のシボ感・ステッチ・角の立体感を強調
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=135, threshold=2)
   )
@@ -224,7 +226,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 画像補正（深みのある濃密ブラウン補正）
+    # 1. 画像補正（本体質感保持＋背景純白化）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
     # 2. AI分類
@@ -343,4 +345,7 @@ async def process_images(request: Request):
         zf.writestr(f"{idx+1:02d}_backup_photo.jpg", img_buf.getvalue())
 
     zip_buf.seek(0)
-    return Response(content=zip_buf.getvalue(), media_type="attachment; filename=processed_images.zip")
+    return Response(
+        content=zip_buf.getvalue(),
+        media_type="attachment; filename=processed_images.zip",
+    )
