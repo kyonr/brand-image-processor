@@ -1,49 +1,36 @@
 import io
-import json
 import math
 import os
 import zipfile
 from fastapi import FastAPI, HTTPException, Request, Response
-from google import genai
-from google.genai import types
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 app = FastAPI()
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 @app.get("/")
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (Independent Dual Collage & Ultra Black"
-          " Protection) is running"
+          "Brand Image Processor API (6 Custom Templates & Ultra Color) is"
+          " running"
       )
   }
 
 
-# === 精密な黒・暗色系商品の自動判定関数 ===
+# === 黒・暗色系商品の自動判定関数 ===
 def is_dark_item(img: Image.Image) -> bool:
-  """白背景を完全に排除し、商品本体が黒・紺・ダークカラーか判定"""
   w, h = img.size
-  # 中央50%の領域（確実に商品が存在する部分）
   crop_area = img.crop((int(w * 0.25), int(h * 0.25), int(w * 0.75), int(h * 0.75)))
   gray = crop_area.convert("L")
-
-  # 背景の白（輝度190以上）を除外した「純・商品領域」
-  product_pixels = [p for p in list(gray.getdata()) if p < 190]
-
+  product_pixels = [p for p in list(gray.getdata()) if p < 195]
   if not product_pixels:
     return False
-
-  # 商品領域の平均輝度が110未満ならダークカラーと判断
   avg_darkness = sum(product_pixels) / len(product_pixels)
-  return avg_darkness < 110
+  return avg_darkness < 95
 
 
-# === 1. 明るさ＆色彩補正（全カラー万能 ＋ 深黒補正） ===
+# === 明るさ＆色彩自動補正（全カラー対応 ＋ 深黒補正） ===
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   img = img.convert("RGB")
   dark_mode = is_dark_item(img)
@@ -51,24 +38,20 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   lut = []
   for i in range(256):
     x = i / 255.0
-
     if dark_mode:
-      # 【黒・紺・ダークカラー専用】
-      # 商品の黒をしっかり深みのある黒に保ち、白光り・テカリを防ぎつつ背景のみ爽やかな白にする
-      if x < 0.35:
-        y = math.pow(x, 1.10) * 0.90
-      elif x < 0.75:
-        t = (x - 0.35) / (0.75 - 0.35)
-        y_35 = math.pow(0.35, 1.10) * 0.90
-        y = y_35 + t * (0.85 - y_35)
+      if x < 0.40:
+        y = math.pow(x, 0.92) * 1.02
+      elif x < 0.80:
+        t = (x - 0.40) / (0.80 - 0.40)
+        y_40 = math.pow(0.40, 0.92) * 1.02
+        y = y_40 + t * (0.88 - y_40)
       elif x < 0.92:
-        t = (x - 0.75) / (0.92 - 0.75)
-        y = 0.85 + math.sin(t * math.pi / 2) * (0.98 - 0.85)
+        t = (x - 0.80) / (0.92 - 0.80)
+        y = 0.88 + math.sin(t * math.pi / 2) * (0.98 - 0.88)
       else:
         t = (x - 0.92) / 0.08
         y = 0.98 + t * 0.02
     else:
-      # 【通常カラー（パステル・ブラウン・ベージュ等）高評価獲得済みの設定】
       if x < 0.68:
         y = math.pow(x, 0.52) * 1.12
       elif x < 0.92:
@@ -85,13 +68,11 @@ def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
   enhanced = img.point(lut * 3)
 
   if dark_mode:
-    # 黒アイテム：コントラストを適度に効かせて重厚感を表現
     enhancer_c = ImageEnhance.Contrast(enhanced)
-    enhanced = enhancer_c.enhance(1.20)
+    enhanced = enhancer_c.enhance(1.12)
     enhancer_s = ImageEnhance.Color(enhanced)
-    enhanced = enhancer_s.enhance(1.05)
+    enhanced = enhancer_s.enhance(1.08)
   else:
-    # 通常カラー
     enhancer_s = ImageEnhance.Color(enhanced)
     enhanced = enhancer_s.enhance(1.22)
     enhancer_c = ImageEnhance.Contrast(enhanced)
@@ -111,17 +92,11 @@ def crop_center(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
   )
 
 
-# === 2. レイアウト生成エンジン（横一列1x4 ＆ 2x4格子） ===
-
-
+# === レイアウト作成パーツ群 ===
 def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
-  """【側面専用】1000x1000正方形キャンバスに縦長写真を必ず横一列（1x4）に並べる"""
   if not images:
     return None
   n = len(images)
-  if n == 1:
-    return crop_center(images[0], 1000, 1000)
-
   cell_w = 1000 // n
   cell_h = 1000
   collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
@@ -130,10 +105,49 @@ def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
   return collage
 
 
-def make_corners_2x4_grid(
+def make_1x2_side_strip(images: list[Image.Image]) -> Image.Image:
+  return make_1x4_side_strip(images)
+
+
+def make_4x2_corners_grid(images: list[Image.Image]) -> Image.Image:
+  if not images:
+    return None
+  cols, rows = 2, 4
+  cell_w, cell_h = 500, 250
+  collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
+  for idx, img in enumerate(images[:8]):
+    r, c = idx // cols, idx % cols
+    collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
+  return collage
+
+
+def make_2x2_grid(images: list[Image.Image]) -> Image.Image:
+  if not images:
+    return None
+  cols, rows = 2, 2
+  cell_w, cell_h = 500, 500
+  collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
+  for idx, img in enumerate(images[:4]):
+    r, c = idx // cols, idx % cols
+    collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
+  return collage
+
+
+def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
+  if not images:
+    return None
+  n = len(images)
+  cell_w, cell_h = 1000, 1000 // n
+  collage = Image.new("RGB", (1000, 1000), (255, 255, 255))
+  for idx, img in enumerate(images):
+    collage.paste(crop_center(img, cell_w, cell_h), (0, idx * cell_h))
+  return collage
+
+
+def make_smart_grid(
     images: list[Image.Image], target_size: int = 1000
 ) -> Image.Image:
-  """【角スレ専用】4列x2行 (2x4) グリッドレイアウト"""
+  """【残り全画像用】枚数に合わせて最適枠（2x2, 2x3, 3x3等）で可変結合"""
   if not images:
     return None
   n = len(images)
@@ -146,79 +160,172 @@ def make_corners_2x4_grid(
     cols, rows = 2, 2
   elif n <= 6:
     cols, rows = 3, 2
+  elif n <= 9:
+    cols, rows = 3, 3
   else:
-    cols, rows = 4, 2  # 7〜8枚：上4枚・下4枚
+    cols, rows = 4, (n + 3) // 4
 
   cell_w = target_size // cols
   cell_h = target_size // rows
 
   collage = Image.new("RGB", (target_size, target_size), (255, 255, 255))
-  for idx, img in enumerate(images[: cols * rows]):
+  for idx, img in enumerate(images):
     r, c = idx // cols, idx % cols
     collage.paste(crop_center(img, cell_w, cell_h), (c * cell_w, r * cell_h))
   return collage
 
 
-# === 3. メインAPIエンドポイント ===
+# === メインAPI ===
 @app.post("/process-images")
 async def process_images(request: Request):
-  enhanced_images = []
   try:
+    p_type = request.query_params.get("type", "wallet_small")
     body = await request.body()
     if not body:
       raise HTTPException(status_code=400, detail="No data")
 
     images = []
-    try:
-      with zipfile.ZipFile(io.BytesIO(body)) as z:
-        for filename in z.namelist():
-          if not filename.startswith("__MACOSX") and not filename.startswith(
-              "."
-          ):
-            img_data = z.read(filename)
-            try:
-              images.append(Image.open(io.BytesIO(img_data)))
-            except Exception:
-              pass
-    except Exception:
-      try:
-        images.append(Image.open(io.BytesIO(body)))
-      except Exception:
-        pass
+    with zipfile.ZipFile(io.BytesIO(body)) as z:
+      for filename in z.namelist():
+        if not filename.startswith("__MACOSX") and not filename.startswith("."):
+          images.append(Image.open(io.BytesIO(z.read(filename))))
 
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 補正適用
-    enhanced_images = [auto_enhance_and_white_background(img) for img in images]
+    # 全画像補正
+    enhanced = [auto_enhance_and_white_background(img) for img in images]
+    out = {}
 
-    # 2. アスペクト比（縦横比）による【完全厳格分類】
-    portrait_sides = []  # 縦長写真 ➔ 1x4横一列結合専用
-    square_corners = []  # 四角写真 ➔ 2x4格子結合専用
+    def get_slice(start, end=None):
+      if end is None:
+        return enhanced[start:]
+      return enhanced[start:end]
 
-    for img in enhanced_images:
-      w, h = img.size
-      # 縦横比が1.02を超えるものはすべて「縦長ショット（側面）」として判定
-      if h > w * 1.02:
-        portrait_sides.append(img)
-      else:
-        square_corners.append(img)
+    # --- 1. 財布（ポケット少） ---
+    if p_type == "wallet_small":
+      if len(enhanced) >= 1:
+        out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
+      if len(enhanced) >= 2:
+        out["02_back.jpg"] = crop_center(enhanced[1], 1000, 1000)
+      if len(enhanced) >= 6:
+        out["03_sides_1x4.jpg"] = make_1x4_side_strip(get_slice(2, 6))
+      if len(enhanced) >= 14:
+        out["04_corners_4x2.jpg"] = make_4x2_corners_grid(get_slice(6, 14))
+      if len(enhanced) >= 15:
+        out["05_inside.jpg"] = crop_center(enhanced[14], 1000, 1000)
+      if len(enhanced) >= 16:
+        out["06_pocket1.jpg"] = crop_center(enhanced[15], 1000, 1000)
+      if len(enhanced) >= 17:
+        out["07_pocket2.jpg"] = crop_center(enhanced[16], 1000, 1000)
+      if len(enhanced) >= 18:
+        out["08_pocket3.jpg"] = crop_center(enhanced[17], 1000, 1000)
+      if len(enhanced) >= 19:
+        out["09_accessories.jpg"] = crop_center(enhanced[18], 1000, 1000)
+      if len(enhanced) >= 20:
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(19))
 
-    output_files = {}
+    # --- 2. 財布（ポケット中） ---
+    elif p_type == "wallet_medium":
+      if len(enhanced) >= 1:
+        out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
+      if len(enhanced) >= 2:
+        out["02_back.jpg"] = crop_center(enhanced[1], 1000, 1000)
+      if len(enhanced) >= 6:
+        out["03_sides_1x4.jpg"] = make_1x4_side_strip(get_slice(2, 6))
+      if len(enhanced) >= 14:
+        out["04_corners_4x2.jpg"] = make_4x2_corners_grid(get_slice(6, 14))
+      if len(enhanced) >= 15:
+        out["05_inside.jpg"] = crop_center(enhanced[14], 1000, 1000)
+      if len(enhanced) >= 17:
+        out["06_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(15, 17))
+      if len(enhanced) >= 18:
+        out["07_pocket1.jpg"] = crop_center(enhanced[17], 1000, 1000)
+      if len(enhanced) >= 19:
+        out["08_pocket2.jpg"] = crop_center(enhanced[18], 1000, 1000)
+      if len(enhanced) >= 20:
+        out["09_accessories.jpg"] = crop_center(enhanced[19], 1000, 1000)
+      if len(enhanced) >= 21:
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
 
-    # 3. それぞれ独立したファイルとして結合画像を生成！
-    # ① 側面（縦長写真がある場合）➔ 必ず独立した 06_sides_1x4.jpg を作成
-    if portrait_sides:
-      output_files["06_sides_1x4.jpg"] = make_1x4_side_strip(portrait_sides)
+    # --- 3. 財布（ポケット多） ---
+    elif p_type == "wallet_large":
+      if len(enhanced) >= 1:
+        out["01_surface.jpg"] = crop_center(enhanced[0], 1000, 1000)
+      if len(enhanced) >= 2:
+        out["02_back.jpg"] = crop_center(enhanced[1], 1000, 1000)
+      if len(enhanced) >= 6:
+        out["03_sides_1x4.jpg"] = make_1x4_side_strip(get_slice(2, 6))
+      if len(enhanced) >= 14:
+        out["04_corners_4x2.jpg"] = make_4x2_corners_grid(get_slice(6, 14))
+      if len(enhanced) >= 15:
+        out["05_inside.jpg"] = crop_center(enhanced[14], 1000, 1000)
+      if len(enhanced) >= 19:
+        out["06_pockets_2x2.jpg"] = make_2x2_grid(get_slice(15, 19))
+      if len(enhanced) >= 20:
+        out["07_pocket1.jpg"] = crop_center(enhanced[19], 1000, 1000)
+      if len(enhanced) >= 21:
+        out["08_pocket2.jpg"] = crop_center(enhanced[20], 1000, 1000)
+      if len(enhanced) >= 22:
+        out["09_accessories.jpg"] = crop_center(enhanced[21], 1000, 1000)
+      if len(enhanced) >= 23:
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(22))
 
-    # ② 角・パーツ（四角写真がある場合）➔ 必ず独立した 08_corners_2x4.jpg を作成
-    if square_corners:
-      output_files["08_corners_2x4.jpg"] = make_corners_2x4_grid(square_corners)
+    # --- 4. バッグ（ポケット少） ---
+    elif p_type == "bag_small":
+      if len(enhanced) >= 1:
+        out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
+      if len(enhanced) >= 2:
+        out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
+      if len(enhanced) >= 3:
+        out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
+      if len(enhanced) >= 5:
+        out["04_sides_1x2.jpg"] = make_1x2_side_strip(get_slice(3, 5))
+      if len(enhanced) >= 7:
+        out["05_top_bottom_2x1.jpg"] = make_stacked_vertical(get_slice(5, 7))
+      if len(enhanced) >= 11:
+        out["06_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
+      if len(enhanced) >= 13:
+        out["07_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
+      if len(enhanced) >= 14:
+        out["08_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
+      if len(enhanced) >= 16:
+        out["09_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
+      if len(enhanced) >= 17:
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(16))
 
-    # 4. ZIP圧縮＆レスポンス生成
+    # --- 5. バッグ（ポケット多） ---
+    elif p_type == "bag_large":
+      if len(enhanced) >= 1:
+        out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
+      if len(enhanced) >= 2:
+        out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
+      if len(enhanced) >= 3:
+        out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
+      if len(enhanced) >= 7:
+        out["04_sides_top_bottom_2x2.jpg"] = make_2x2_grid(get_slice(3, 7))
+      if len(enhanced) >= 11:
+        out["05_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
+      if len(enhanced) >= 13:
+        out["06_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
+      if len(enhanced) >= 14:
+        out["07_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
+      if len(enhanced) >= 16:
+        out["08_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
+      if len(enhanced) >= 20:
+        out["09_pockets_2x2.jpg"] = make_2x2_grid(get_slice(16, 20))
+      if len(enhanced) >= 21:
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20))
+
+    # --- 6. バッグ（フリー） ---
+    elif p_type == "bag_free":
+      for idx, img in enumerate(enhanced):
+        out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
+
+    # ZIP作成＆返却
     zip_buf = io.BytesIO()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-      for fname, img_obj in output_files.items():
+      for fname, img_obj in out.items():
         if img_obj:
           img_buf = io.BytesIO()
           img_obj.save(img_buf, format="JPEG", quality=95)
@@ -234,22 +341,4 @@ async def process_images(request: Request):
     )
 
   except Exception as e:
-    # エラー時でも絶対にショートカットを落とさないよう、補正済みの単品画像をZIPにして返却
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-      if enhanced_images:
-        for idx, img in enumerate(enhanced_images):
-          img_buf = io.BytesIO()
-          img.save(img_buf, format="JPEG", quality=90)
-          zf.writestr(f"{idx+1:02d}_backup_photo.jpg", img_buf.getvalue())
-      else:
-        zf.writestr("00_error.txt", f"Error processing: {str(e)}")
-
-    zip_buf.seek(0)
-    return Response(
-        content=zip_buf.getvalue(),
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": "attachment; filename=processed_images.zip"
-        },
-    )
+    raise HTTPException(status_code=500, detail=str(e))
