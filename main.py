@@ -18,45 +18,53 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 def read_root():
   return {
       "status": (
-          "Brand Image Processor API (AI & Brilliance Anti-Glare Model) is"
+          "Brand Image Processor API (AI & Multi-Color Universal Model) is"
           " running"
       )
   }
 
 
 def auto_enhance_and_white_background(img: Image.Image) -> Image.Image:
-  """ブリリアンス補正（暗部救済 ＋ ハイライト白飛び防止 ＋ エンボス立体感保持）"""
+  """全カラー対応（背景明瞭化 ＋ ブラウン暗さ解消 ＋ パステル白飛び防止）"""
   img = img.convert("RGB")
 
-  # iPhoneの「ブリリアンス」を再現するスマートトーンカーブ
+  # ゾーン別高精度トーンカーブ
   lut = []
   for i in range(256):
     x = i / 255.0
 
-    # 暗部〜中間部(x < 0.75): 影を自然に浮かせて明るく見やすくする
-    # 高輝度部(x >= 0.75): 白飛び・白光り・テカリを強力にブレーキ（ハイライト抑制）
-    if x < 0.75:
-      y = math.pow(x, 0.62) * 1.06
+    # ゾーン1: 暗部〜中間色 (x < 0.68)
+    # ブラウン系・黒・キャメル地の影をしっかり浮かせて暗さを解消
+    if x < 0.68:
+      y = math.pow(x, 0.52) * 1.12
+    # ゾーン2: 背景の薄グレー領域 (0.68 <= x < 0.92)
+    # 背景領域を滑らかに持ち上げて明るく爽やかな白にする
+    elif x < 0.92:
+      t = (x - 0.68) / (0.92 - 0.68)
+      y_68 = math.pow(0.68, 0.52) * 1.12  # 約 0.92
+      y = y_68 + math.sin(t * math.pi / 2) * (0.98 - y_68)
+    # ゾーン3: 最高輝度ハイライト部 (x >= 0.92)
+    # パステルカラーや金属パーツの白飛び・白光りをなだらかに抑制
     else:
-      y_75 = math.pow(0.75, 0.62) * 1.06
-      t = (x - 0.75) / 0.25
-      y = y_75 + t * (1.0 - y_75)
+      t = (x - 0.92) / 0.08
+      y = 0.98 + t * 0.02
 
     val = min(255, max(0, int(y * 255.0)))
     lut.append(val)
 
   enhanced = img.point(lut * 3)
 
-  # 白飛びの原因だった一律の全域Brightnessブーストを廃止し、自然な色彩とコントラストを保持
+  # モノグラムのブラウンのコクとパステルカラーの発色を両立（彩度1.22倍）
   enhancer_s = ImageEnhance.Color(enhanced)
-  enhanced = enhancer_s.enhance(1.18)  # 赤箱やパステルカラーを鮮やかに保つ
+  enhanced = enhancer_s.enhance(1.22)
 
+  # コントラストでメリハリを調整
   enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.08)  # エンボスの凹凸を引き締める
+  enhanced = enhancer_c.enhance(1.10)
 
-  # レザーのシボ感・エンボスの柄・ステッチの立体感を強調
+  # 革のシボ感・押し柄の立体感・ステッチをシャープに強調
   return enhanced.filter(
-      ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
+      ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2)
   )
 
 
@@ -217,7 +225,7 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 1. 画像補正（ブリリアンス型 白飛び防止 ＋ 暗部救済）
+    # 1. 画像補正（全カラー万能補正）
     enhanced_images = [auto_enhance_and_white_background(img) for img in images]
 
     # 2. AI分類
