@@ -53,7 +53,7 @@ def enhance_surface(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
     elif color_cat == "brown":
-        # ★ブラウン強化：ガンマ0.62、明るさ+20%、白抜け強化、彩度微調整
+        # ★ブラウン強化：明るさ+20%、彩度1.10
         enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.28))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
@@ -74,7 +74,7 @@ def enhance_side(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%、彩度+20%で鮮やかさを引き上げ
+        # ★ブラウン強化：明るさ+20%、彩度+20%
         enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.25))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
         enhanced = ImageEnhance.Color(enhanced).enhance(1.20)
@@ -111,7 +111,7 @@ def enhance_standard(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%で内側の暗さを大幅改善
+        # ★ブラウン強化：明るさ+20%で暗さ改善
         enhanced = img.point(make_white_boost_lut(gamma=0.55, boost_strength=0.25))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
@@ -280,4 +280,56 @@ async def process_images(request: Request):
             if len(enhanced) >= 1: out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
             if len(enhanced) >= 2: out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
             if len(enhanced) >= 3: out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
-            if len(enhanced) >= 5: out["04_sides_1x2.jpg"] = make_1x4_side_strip(get_slice(3
+            if len(enhanced) >= 5: out["04_sides_1x2.jpg"] = make_1x4_side_strip(get_slice(3, 5))
+            if len(enhanced) >= 7: out["05_top_bottom_2x1.jpg"] = make_stacked_vertical(get_slice(5, 7))
+            if len(enhanced) >= 11: out["06_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
+            if len(enhanced) >= 13: out["07_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
+            if len(enhanced) >= 14: out["08_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
+            if len(enhanced) >= 16: out["09_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
+            if len(enhanced) >= 17: out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(16, hw=True))
+
+        elif p_type == "bag_large":
+            if len(enhanced) >= 1: out["01_thumb.jpg"] = crop_center(enhanced[0], 1000, 1000)
+            if len(enhanced) >= 2: out["02_front.jpg"] = crop_center(enhanced[1], 1000, 1000)
+            if len(enhanced) >= 3: out["03_back.jpg"] = crop_center(enhanced[2], 1000, 1000)
+            if len(enhanced) >= 7: out["04_sides_top_bottom_2x2.jpg"] = make_2x2_grid(get_slice(3, 7))
+            if len(enhanced) >= 11: out["05_corners_2x2.jpg"] = make_2x2_grid(get_slice(7, 11))
+            if len(enhanced) >= 13: out["06_handles_2x1.jpg"] = make_stacked_vertical(get_slice(11, 13))
+            if len(enhanced) >= 14: out["07_inside.jpg"] = crop_center(enhanced[13], 1000, 1000)
+            if len(enhanced) >= 16: out["08_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
+            if len(enhanced) >= 20: out["09_pockets_2x2.jpg"] = make_2x2_grid(get_slice(16, 20))
+            if len(enhanced) >= 21: out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20, hw=True))
+
+        else:
+            for idx, img in enumerate(enhanced):
+                out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
+
+        if not out:
+            for idx, img in enumerate(enhanced):
+                out[f"{idx+1:02d}_photo.jpg"] = crop_center(img, 1000, 1000)
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fname, img_obj in out.items():
+                if img_obj:
+                    img_buf = io.BytesIO()
+                    img_obj.save(img_buf, format="JPEG", quality=95)
+                    zf.writestr(fname, img_buf.getvalue())
+
+        zip_buf.seek(0)
+        return Response(
+            content=zip_buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=processed_images.zip"}
+        )
+
+    except Exception as e:
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("error.txt", f"Processing error: {str(e)}")
+        zip_buf.seek(0)
+        return Response(
+            content=zip_buf.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": "attachment; filename=processed_images.zip"}
+        )
