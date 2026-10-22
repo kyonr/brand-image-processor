@@ -22,12 +22,10 @@ GAP = 6  # 写真同士の間の白仕切り線
 def get_item_color_category(img: Image.Image) -> str:
   """背景（白や背景物）を除外し、商品領域の明るさから 'black', 'brown', 'light' に分類"""
   w, h = img.size
-  # 中央の商品エリアを抽出
   crop_area = img.crop((int(w * 0.25), int(h * 0.25), int(w * 0.75), int(h * 0.75)))
   gray = crop_area.convert("L")
   pixels = list(gray.getdata())
 
-  # 背景の極端な白（飛ばし部分）を除外して商品ピクセルのみ抽出
   product_pixels = [p for p in pixels if p < 220]
 
   if not product_pixels:
@@ -43,6 +41,17 @@ def get_item_color_category(img: Image.Image) -> str:
     return "light"  # パステル・ホワイト・明るいカラー
 
 
+# === なめらかなガンマ補正LUT生成関数（段差・色化けを100%防止） ===
+def make_smooth_lut(gamma: float) -> list[int]:
+  lut = []
+  for i in range(256):
+    x = i / 255.0
+    y = math.pow(x, gamma)  # 完全連続な曲線
+    val = min(255, max(0, int(y * 255.0)))
+    lut.append(val)
+  return lut * 3
+
+
 # === 1. 1〜2枚目専用：表面・裏面 ===
 def enhance_surface(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
@@ -50,76 +59,37 @@ def enhance_surface(img: Image.Image) -> Image.Image:
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    # 黒革：テカリ・白飛びカット＆黒引き締め
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      y = math.pow(x, 0.95) * 0.98 if x < 0.40 else x
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
+    enhanced = img.point(make_smooth_lut(gamma=0.95))
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.20)
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.02)
-
   elif color_cat == "brown":
-    # ブラウン系：シャドウ（暗部）を＋20%引き上げて明るく
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      if x < 0.60:
-        y = math.pow(x, 0.72) * 1.12  # シャドウ持ち上げ
-      else:
-        y = x
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
+    enhanced = img.point(make_smooth_lut(gamma=0.75))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.08)
-
   else:
-    # パステル・明色：全体をしっかり明るくトーンカーブ補正（5枚目の明るさ目標）
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      if x < 0.70:
-        y = math.pow(x, 0.55) * 1.18  # 全体明度UP
-      elif x < 0.92:
-        t = (x - 0.70) / 0.22
-        y = 0.98 + t * 0.01
-      else:
-        y = 0.99 + (x - 0.92) * 0.12
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.12)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
+    # パステル・明色：3枚目の理想的な明るさに合わせて露出を約5%ダウン調整
+    enhanced = img.point(make_smooth_lut(gamma=0.72))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.03)
+    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.03)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 2. 3枚目専用：側面（背景純白化） ===
+# === 2. 3枚目専用：側面（★基準となる理想の明るさ★） ===
 def enhance_side(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      y = math.pow(x, 0.75) * 1.12 if x < 0.45 else x
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
+    enhanced = img.point(make_smooth_lut(gamma=0.82))
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
   else:
-    # パステル・ブラウン系側面の明るさ統一
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      y = math.pow(x, 0.58) * 1.15 if x < 0.75 else 0.98 + (x - 0.75) * 0.08
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.10)
+    enhanced = img.point(make_smooth_lut(gamma=0.68))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -133,23 +103,12 @@ def enhance_corner(img: Image.Image) -> Image.Image:
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    # 黒革：黒引き締めモード
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      y = math.pow(x, 0.88) * 1.02 if x < 0.45 else x
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
+    enhanced = img.point(make_smooth_lut(gamma=0.92))
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
   else:
-    # パステル・ブラウン：暗いコマが混ざらないよう均一に明るく補正
-    lut = []
-    for i in range(256):
-      x = i / 255.0
-      y = math.pow(x, 0.58) * 1.16 if x < 0.75 else 0.98 + (x - 0.75) * 0.08
-      lut.append(min(255, max(0, int(y * 255.0))))
-    enhanced = img.point(lut * 3)
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.10)
+    # パステル・ブラウン：3枚目と同等の自然で揃った明るさ（露出-5%調整）
+    enhanced = img.point(make_smooth_lut(gamma=0.72))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.03)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -162,34 +121,26 @@ def enhance_standard(img: Image.Image) -> Image.Image:
   img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
-  lut = []
-  for i in range(256):
-    x = i / 255.0
-    if color_cat == "black":
-      y = math.pow(x, 0.75) * 1.15 if x < 0.45 else x
-    else:
-      y = math.pow(x, 0.60) * 1.14 if x < 0.70 else x
-    lut.append(min(255, max(0, int(y * 255.0))))
+  if color_cat == "black":
+    enhanced = img.point(make_smooth_lut(gamma=0.80))
+  else:
+    enhanced = img.point(make_smooth_lut(gamma=0.68))
 
-  enhanced = img.point(lut * 3)
-  enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
-  enhanced = ImageEnhance.Contrast(enhanced).enhance(1.08)
+  enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
+  enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 5. ★新設★ 10枚目専用：金具・刻印・シリアル用（白飛び防止・露出+20%抑えめ） ===
+# === 5. 10枚目専用：金具・刻印・シリアル用（高評価のため完全キープ） ===
 def enhance_hardware(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
 
-  # 白飛びさせず文字や金属の刻みを引き立たせるマイルド補正
-  enhancer_b = ImageEnhance.Brightness(img)
-  enhanced = enhancer_b.enhance(1.15)  # 露出約+15〜20%
-  enhancer_c = ImageEnhance.Contrast(enhanced)
-  enhanced = enhancer_c.enhance(1.05)  # 微コントラストでくっきり
+  enhanced = ImageEnhance.Brightness(img).enhance(1.15)
+  enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.0, percent=110, threshold=1)
@@ -316,11 +267,10 @@ async def process_images(request: Request):
     if not images:
       raise HTTPException(status_code=400, detail="No images")
 
-    # 画像ごとの個別補正
     enhanced = []
-    enhanced_hw = []  # 10枚目金具用の抑えめ画像群
+    enhanced_hw = []
     for idx, img in enumerate(images):
-      enhanced_hw.append(enhance_hardware(img))  # 10枚目用は一律マイルド補正
+      enhanced_hw.append(enhance_hardware(img))
 
       if idx in [0, 1]:  # 1・2枚目（表面・裏面）
         enhanced.append(enhance_surface(img))
@@ -360,9 +310,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 19:
         out["09_accessories.jpg"] = crop_center(enhanced[18], 1000, 1000)
       if len(enhanced) >= 20:
-        out["10_hardware_etc.jpg"] = make_smart_grid(
-            get_slice(19, hw=True)
-        )  # 10枚目は金具専用モード
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(19, hw=True))
 
     # --- 2. 財布（ポケット中） ---
     elif p_type == "wallet_medium":
@@ -385,9 +333,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 20:
         out["09_accessories.jpg"] = crop_center(enhanced[19], 1000, 1000)
       if len(enhanced) >= 21:
-        out["10_hardware_etc.jpg"] = make_smart_grid(
-            get_slice(20, hw=True)
-        )  # 10枚目は金具専用モード
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20, hw=True))
 
     # --- 3. 財布（ポケット多） ---
     elif p_type == "wallet_large":
@@ -410,9 +356,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 22:
         out["09_accessories.jpg"] = crop_center(enhanced[21], 1000, 1000)
       if len(enhanced) >= 23:
-        out["10_hardware_etc.jpg"] = make_smart_grid(
-            get_slice(22, hw=True)
-        )  # 10枚目は金具専用モード
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(22, hw=True))
 
     # --- 4. バッグ（ポケット少） ---
     elif p_type == "bag_small":
@@ -435,9 +379,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 16:
         out["09_pockets_2x1.jpg"] = make_stacked_vertical(get_slice(14, 16))
       if len(enhanced) >= 17:
-        out["10_hardware_etc.jpg"] = make_smart_grid(
-            get_slice(16, hw=True)
-        )  # 10枚目は金具専用モード
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(16, hw=True))
 
     # --- 5. バッグ（ポケット多） ---
     elif p_type == "bag_large":
@@ -460,9 +402,7 @@ async def process_images(request: Request):
       if len(enhanced) >= 20:
         out["09_pockets_2x2.jpg"] = make_2x2_grid(get_slice(16, 20))
       if len(enhanced) >= 21:
-        out["10_hardware_etc.jpg"] = make_smart_grid(
-            get_slice(20, hw=True)
-        )  # 10枚目は金具専用モード
+        out["10_hardware_etc.jpg"] = make_smart_grid(get_slice(20, hw=True))
 
     # --- 6. フリー ---
     else:
