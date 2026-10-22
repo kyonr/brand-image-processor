@@ -3,7 +3,7 @@ import math
 import os
 import zipfile
 from fastapi import FastAPI, HTTPException, Request, Response
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 app = FastAPI()
 
@@ -18,30 +18,7 @@ MARGIN = 6  # 画像全体の周囲の白枠
 GAP = 6  # 写真同士の間の白仕切り線
 
 
-# === 商品カラーの3段階高精度自動判定関数 ===
-def get_item_color_category(img: Image.Image) -> str:
-  """背景（白や背景物）を除外し、商品領域の明るさから 'black', 'brown', 'light' に分類"""
-  w, h = img.size
-  crop_area = img.crop((int(w * 0.25), int(h * 0.25), int(w * 0.75), int(h * 0.75)))
-  gray = crop_area.convert("L")
-  pixels = list(gray.getdata())
-
-  product_pixels = [p for p in pixels if p < 220]
-
-  if not product_pixels:
-    return "light"
-
-  avg_brightness = sum(product_pixels) / len(product_pixels)
-
-  if avg_brightness < 75:
-    return "black"  # 黒革・ダークカラー
-  elif avg_brightness < 135:
-    return "brown"  # モノグラム・ブラウン・中間色
-  else:
-    return "light"  # パステル・ホワイト・明るいカラー
-
-
-# === なめらかなガンマ補正LUT生成関数（色飛び・階調飛びを100%防止） ===
+# === なめらかなガンマ補正LUT生成関数 ===
 def make_smooth_lut(gamma: float) -> list[int]:
   lut = []
   for i in range(256):
@@ -52,89 +29,94 @@ def make_smooth_lut(gamma: float) -> list[int]:
   return lut * 3
 
 
-# === 1. 1〜2枚目専用：表面・裏面（露出さらに20%UP） ===
+# === 自動輝度調整（オート露出＆白飛びガード）コア関数 ===
+def auto_target_enhance(
+    img: Image.Image,
+    target_mean: float = 170.0,
+    max_brightness_boost: float = 1.25,
+) -> Image.Image:
+  """元画像の輝度を測定し、目標値(target_mean)へ自動収縮させる。白飛びを防ぐ上限ガード付き。"""
+  gray = img.convert("L")
+  stat = ImageStat.Stat(gray)
+  current_mean = stat.mean[0]
+
+  if current_mean <= 0:
+    return img
+
+  # 必要補正倍率の動的計算
+  ratio = target_mean / current_mean
+
+  # 補正が極端になりすぎないよう安全ガード（倍率制限）
+  ratio = max(0.85, min(max_brightness_boost, ratio))
+
+  # 動的ガンマ補正（暗い画像はガンマを下げて持ち上げ、明るい画像は維持）
+  gamma = 1.0 / math.pow(ratio, 0.8)
+  gamma = max(0.55, min(1.0, gamma))
+
+  enhanced = img.point(make_smooth_lut(gamma=gamma))
+  enhanced = ImageEnhance.Brightness(enhanced).enhance(
+      math.sqrt(ratio)
+  )  # マイルドに明るさ追従
+  enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
+
+  return enhanced
+
+
+# === 1. 1〜2枚目専用：表面・裏面 ===
 def enhance_surface(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
-  color_cat = get_item_color_category(img)
 
-  if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.95))
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.20)
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.02)
-  elif color_cat == "brown":
-    enhanced = img.point(make_smooth_lut(gamma=0.75))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.08)
-  else:
-    # パステル・明色：ガンマ強化＆露出+20%アップ
-    enhanced = img.point(make_smooth_lut(gamma=0.52))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.30)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.03)
-
+  # 1・2枚目は少ししっかりめの明るさ（目標輝度: 175）へ自動調整
+  enhanced = auto_target_enhance(
+      img, target_mean=175.0, max_brightness_boost=1.30
+  )
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 2. 3枚目専用：側面（露出さらに20%UP） ===
+# === 2. 3枚目専用：側面 ===
 def enhance_side(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
-  color_cat = get_item_color_category(img)
 
-  if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.82))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
-  else:
-    enhanced = img.point(make_smooth_lut(gamma=0.52))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.28)
-
+  # 側面は影ができやすいため自然な高輝度（目標輝度: 172）へ自動調整
+  enhanced = auto_target_enhance(
+      img, target_mean=172.0, max_brightness_boost=1.25
+  )
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 3. 4枚目専用：角スレ8箇所（露出さらに20%UP） ===
+# === 3. 4枚目専用：角スレ8箇所 ===
 def enhance_corner(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
-  color_cat = get_item_color_category(img)
 
-  if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.92))
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
-  else:
-    enhanced = img.point(make_smooth_lut(gamma=0.55))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.28)
-
+  enhanced = auto_target_enhance(
+      img, target_mean=170.0, max_brightness_boost=1.22
+  )
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 4. 標準補正（5〜9枚目：内側・ポケット用：露出さらに20%UP） ===
+# === 4. 標準補正（5〜9枚目：内側・ポケット用） ===
 def enhance_standard(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
-  color_cat = get_item_color_category(img)
 
-  if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.80))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
-  else:
-    enhanced = img.point(make_smooth_lut(gamma=0.52))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.28)
-    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.03)
-
+  enhanced = auto_target_enhance(
+      img, target_mean=168.0, max_brightness_boost=1.20
+  )
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
   )
 
 
-# === 5. 10枚目専用：金具・刻印・シリアル用（マイルド補正キープ） ===
+# === 5. 10枚目専用：金具・刻印・シリアル用（高評価の補正をキープ） ===
 def enhance_hardware(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
