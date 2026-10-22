@@ -41,35 +41,44 @@ def get_item_color_category(img: Image.Image) -> str:
     return "light"  # パステル・ホワイト・明るいカラー
 
 
-# === なめらかなガンマ補正LUT生成関数（色飛び・階調飛びを100%防止） ===
-def make_smooth_lut(gamma: float) -> list[int]:
+# === ★背景白抜け強化トーンカーブLUT生成関数★ ===
+def make_white_boost_lut(
+    gamma: float, boost_strength: float = 0.25
+) -> list[int]:
+  """基本のガンマ補正を行いつつ、明るい領域（背景のグレー影）だけを滑らかに純白へ寄せるLUT"""
   lut = []
   for i in range(256):
     x = i / 255.0
     y = math.pow(x, gamma)
+
+    # 明るい領域（背景側）の影だけを自然に押し上げる
+    if x > 0.45:
+      h_factor = math.pow((x - 0.45) / 0.55, 1.3)
+      y = y + (1.0 - y) * h_factor * boost_strength
+
     val = min(255, max(0, int(y * 255.0)))
     lut.append(val)
   return lut * 3
 
 
-# === 1. 1〜2枚目専用：表面・裏面（暗くなりやすいためしっかり明るく） ===
+# === 1. 1〜2枚目専用：表面・裏面 ===
 def enhance_surface(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.92))
+    enhanced = img.point(make_white_boost_lut(gamma=0.92, boost_strength=0.15))
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
   elif color_cat == "brown":
-    enhanced = img.point(make_smooth_lut(gamma=0.72))
+    enhanced = img.point(make_white_boost_lut(gamma=0.72, boost_strength=0.20))
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.06)
   else:
-    # パステル・明色：1枚目の暗さを防ぐ黄金設定（露出+15%）
-    enhanced = img.point(make_smooth_lut(gamma=0.58))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.15)
+    # パステル・明色：背景の薄影を飛ばして白抜け感をアップ
+    enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.28))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.12)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
 
   return enhanced.filter(
@@ -77,20 +86,19 @@ def enhance_surface(img: Image.Image) -> Image.Image:
   )
 
 
-# === 2. 3枚目専用：側面（眩しさを抑えた適正露出） ===
+# === 2. 3枚目専用：側面 ===
 def enhance_side(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.82))
+    enhanced = img.point(make_white_boost_lut(gamma=0.82, boost_strength=0.15))
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
   else:
-    # パステル・明色：露出+12%（白飛びガード）
-    enhanced = img.point(make_smooth_lut(gamma=0.62))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
+    enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -104,11 +112,11 @@ def enhance_corner(img: Image.Image) -> Image.Image:
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.92))
+    enhanced = img.point(make_white_boost_lut(gamma=0.92, boost_strength=0.15))
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
   else:
-    enhanced = img.point(make_smooth_lut(gamma=0.62))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
+    enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
 
   return enhanced.filter(
       ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2)
@@ -122,12 +130,12 @@ def enhance_standard(img: Image.Image) -> Image.Image:
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
-    enhanced = img.point(make_smooth_lut(gamma=0.80))
+    enhanced = img.point(make_white_boost_lut(gamma=0.80, boost_strength=0.15))
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
   else:
-    enhanced = img.point(make_smooth_lut(gamma=0.60))
-    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
+    enhanced = img.point(make_white_boost_lut(gamma=0.60, boost_strength=0.22))
+    enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
 
   return enhanced.filter(
@@ -135,7 +143,7 @@ def enhance_standard(img: Image.Image) -> Image.Image:
   )
 
 
-# === 5. 10枚目専用：金具・刻印・シリアル用（高評価補正キープ） ===
+# === 5. 10枚目専用：金具・刻印・シリアル用（文字・刻印保護のため現状維持） ===
 def enhance_hardware(img: Image.Image) -> Image.Image:
   img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
   img = img.convert("RGB")
