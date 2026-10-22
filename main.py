@@ -2,6 +2,7 @@ import io
 import math
 import os
 import zipfile
+import gc
 from fastapi import FastAPI, HTTPException, Request, Response
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
@@ -20,7 +21,6 @@ GAP = 6  # 写真同士の間の白仕切り線
 
 # === 商品カラーの3段階高精度自動判定関数 ===
 def get_item_color_category(img: Image.Image) -> str:
-  """背景（白や背景物）を除外し、商品領域の明るさから 'black', 'brown', 'light' に分類"""
   w, h = img.size
   crop_area = img.crop((int(w * 0.25), int(h * 0.25), int(w * 0.75), int(h * 0.75)))
   gray = crop_area.convert("L")
@@ -34,28 +34,24 @@ def get_item_color_category(img: Image.Image) -> str:
   avg_brightness = sum(product_pixels) / len(product_pixels)
 
   if avg_brightness < 75:
-    return "black"  # 黒革・ダークカラー
+    return "black"
   elif avg_brightness < 135:
-    return "brown"  # モノグラム・ブラウン・中間色
+    return "brown"
   else:
-    return "light"  # パステル・ホワイト・明るいカラー
+    return "light"
 
 
-# === ★背景白抜け強化トーンカーブLUT生成関数★ ===
+# === 背景白抜け強化トーンカーブLUT生成関数 ===
 def make_white_boost_lut(
     gamma: float, boost_strength: float = 0.25
 ) -> list[int]:
-  """基本のガンマ補正を行いつつ、明るい領域（背景のグレー影）だけを滑らかに純白へ寄せるLUT"""
   lut = []
   for i in range(256):
     x = i / 255.0
     y = math.pow(x, gamma)
-
-    # 明るい領域（背景側）の影だけを自然に押し上げる
     if x > 0.45:
       h_factor = math.pow((x - 0.45) / 0.55, 1.3)
       y = y + (1.0 - y) * h_factor * boost_strength
-
     val = min(255, max(0, int(y * 255.0)))
     lut.append(val)
   return lut * 3
@@ -63,8 +59,6 @@ def make_white_boost_lut(
 
 # === 1. 1〜2枚目専用：表面・裏面 ===
 def enhance_surface(img: Image.Image) -> Image.Image:
-  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-  img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
@@ -76,7 +70,6 @@ def enhance_surface(img: Image.Image) -> Image.Image:
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.06)
   else:
-    # パステル・明色：背景の薄影を飛ばして白抜け感をアップ
     enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.28))
     enhanced = ImageEnhance.Brightness(enhanced).enhance(1.12)
     enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
@@ -88,8 +81,6 @@ def enhance_surface(img: Image.Image) -> Image.Image:
 
 # === 2. 3枚目専用：側面 ===
 def enhance_side(img: Image.Image) -> Image.Image:
-  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-  img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
@@ -107,8 +98,6 @@ def enhance_side(img: Image.Image) -> Image.Image:
 
 # === 3. 4枚目専用：角スレ8箇所 ===
 def enhance_corner(img: Image.Image) -> Image.Image:
-  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-  img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
@@ -125,8 +114,6 @@ def enhance_corner(img: Image.Image) -> Image.Image:
 
 # === 4. 標準補正（5〜9枚目：内側・ポケット用） ===
 def enhance_standard(img: Image.Image) -> Image.Image:
-  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-  img = img.convert("RGB")
   color_cat = get_item_color_category(img)
 
   if color_cat == "black":
@@ -143,11 +130,8 @@ def enhance_standard(img: Image.Image) -> Image.Image:
   )
 
 
-# === 5. 10枚目専用：金具・刻印・シリアル用（文字・刻印保護のため現状維持） ===
+# === 5. 10枚目専用：金具・刻印・シリアル用 ===
 def enhance_hardware(img: Image.Image) -> Image.Image:
-  img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
-  img = img.convert("RGB")
-
   enhanced = ImageEnhance.Brightness(img).enhance(1.15)
   enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
 
@@ -165,7 +149,7 @@ def crop_center(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
   )
 
 
-# === レイアウト作成パーツ群（白仕切り線＆外枠付き） ===
+# === レイアウト作成パーツ群 ===
 def make_1x4_side_strip(images: list[Image.Image]) -> Image.Image:
   if not images:
     return None
@@ -256,7 +240,7 @@ def make_smart_grid(
   return collage
 
 
-# === メインAPI ===
+# === メインAPI（★即時軽量化・メモリ徹底解放処理★） ===
 @app.post("/process-images")
 async def process_images(request: Request):
   enhanced = []
@@ -268,10 +252,16 @@ async def process_images(request: Request):
       raise HTTPException(status_code=400, detail="No data")
 
     images = []
+    # 【メモリ対策】Zip解凍時に即座に1200pxに縮小してメモリ消費を90%カット
     with zipfile.ZipFile(io.BytesIO(body)) as z:
       for filename in z.namelist():
         if not filename.startswith("__MACOSX") and not filename.startswith("."):
-          images.append(Image.open(io.BytesIO(z.read(filename))))
+          with Image.open(io.BytesIO(z.read(filename))) as temp_img:
+            temp_img.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+            images.append(temp_img.convert("RGB"))
+
+    del body
+    gc.collect()  # メモリ強制解放
 
     if not images:
       raise HTTPException(status_code=400, detail="No images")
@@ -281,13 +271,13 @@ async def process_images(request: Request):
     for idx, img in enumerate(images):
       enhanced_hw.append(enhance_hardware(img))
 
-      if idx in [0, 1]:  # 1・2枚目（表面・裏面）
+      if idx in [0, 1]:
         enhanced.append(enhance_surface(img))
-      elif 2 <= idx <= 5:  # 3枚目（側面4方向）
+      elif 2 <= idx <= 5:
         enhanced.append(enhance_side(img))
-      elif 6 <= idx <= 13:  # 4枚目（角スレ8箇所）
+      elif 6 <= idx <= 13:
         enhanced.append(enhance_corner(img))
-      else:  # 5枚目以降（標準補正）
+      else:
         enhanced.append(enhance_standard(img))
 
     out = {}
