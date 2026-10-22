@@ -167,21 +167,93 @@ def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
         collage.paste(crop_center(img, cell_w, cell_h), (MARGIN, MARGIN + idx * (cell_h + GAP)))
     return collage
 
+# ★★★ 空白（隙間）を一切作らない高密度スマートグリッド ★★★
 def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image.Image:
-    if not images: return None
+    if not images:
+        return None
     n = len(images)
-    if n == 1: return crop_center(images[0], target_size, target_size)
-    if n <= 2: cols, rows = 2, 1
-    elif n <= 4: cols, rows = 2, 2
-    elif n <= 6: cols, rows = 3, 2
-    elif n <= 9: cols, rows = 3, 3
-    else: cols, rows = 4, (n + 3) // 4
-    cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
-    cell_h = (target_size - MARGIN * 2 - GAP * (rows - 1)) // rows
     collage = Image.new("RGB", (target_size, target_size), (255, 255, 255))
-    for idx, img in enumerate(images):
-        r, c = idx // cols, idx % cols
-        collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
+
+    # 1枚
+    if n == 1:
+        return crop_center(images[0], target_size, target_size)
+
+    # 2枚（左右分割）
+    elif n == 2:
+        cell_w = (target_size - MARGIN * 2 - GAP) // 2
+        cell_h = target_size - MARGIN * 2
+        collage.paste(crop_center(images[0], cell_w, cell_h), (MARGIN, MARGIN))
+        collage.paste(crop_center(images[1], cell_w, cell_h), (MARGIN + cell_w + GAP, MARGIN))
+
+    # 3枚（上1枚、下2枚）
+    elif n == 3:
+        h_half = (target_size - MARGIN * 2 - GAP) // 2
+        # 上段：1枚（幅広）
+        w_top = target_size - MARGIN * 2
+        collage.paste(crop_center(images[0], w_top, h_half), (MARGIN, MARGIN))
+        # 下段：2枚
+        w_bottom = (target_size - MARGIN * 2 - GAP) // 2
+        y_bottom = MARGIN + h_half + GAP
+        collage.paste(crop_center(images[1], w_bottom, h_half), (MARGIN, y_bottom))
+        collage.paste(crop_center(images[2], w_bottom, h_half), (MARGIN + w_bottom + GAP, y_bottom))
+
+    # 4枚（2x2）
+    elif n == 4:
+        return make_2x2_grid(images)
+
+    # 5枚（上2枚、下3枚）
+    elif n == 5:
+        h_half = (target_size - MARGIN * 2 - GAP) // 2
+        # 上段：2枚
+        w_top = (target_size - MARGIN * 2 - GAP) // 2
+        for i in range(2):
+            collage.paste(crop_center(images[i], w_top, h_half), (MARGIN + i * (w_top + GAP), MARGIN))
+        # 下段：3枚
+        w_bottom = (target_size - MARGIN * 2 - GAP * 2) // 3
+        y_bottom = MARGIN + h_half + GAP
+        for i in range(3):
+            collage.paste(crop_center(images[2 + i], w_bottom, h_half), (MARGIN + i * (w_bottom + GAP), y_bottom))
+
+    # 6枚（2行3列）
+    elif n == 6:
+        cols, rows = 3, 2
+        cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
+        cell_h = (target_size - MARGIN * 2 - GAP * (rows - 1)) // rows
+        for idx, img in enumerate(images[:6]):
+            r, c = idx // cols, idx % cols
+            collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
+
+    # 7枚（上3枚、下4枚）
+    elif n == 7:
+        h_half = (target_size - MARGIN * 2 - GAP) // 2
+        # 上段：3枚
+        w_top = (target_size - MARGIN * 2 - GAP * 2) // 3
+        for i in range(3):
+            collage.paste(crop_center(images[i], w_top, h_half), (MARGIN + i * (w_top + GAP), MARGIN))
+        # 下段：4枚
+        w_bottom = (target_size - MARGIN * 2 - GAP * 3) // 4
+        y_bottom = MARGIN + h_half + GAP
+        for i in range(4):
+            collage.paste(crop_center(images[3 + i], w_bottom, h_half), (MARGIN + i * (w_bottom + GAP), y_bottom))
+
+    # 8枚（2行4列）
+    elif n == 8:
+        cols, rows = 4, 2
+        cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
+        cell_h = (target_size - MARGIN * 2 - GAP * (rows - 1)) // rows
+        for idx, img in enumerate(images[:8]):
+            r, c = idx // cols, idx % cols
+            collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
+
+    # 9枚（3行3列）
+    else:
+        cols, rows = 3, 3
+        cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
+        cell_h = (target_size - MARGIN * 2 - GAP * (rows - 1)) // rows
+        for idx, img in enumerate(images[:9]):
+            r, c = idx // cols, idx % cols
+            collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
+
     return collage
 
 @app.post("/process-images")
