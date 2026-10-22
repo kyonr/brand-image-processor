@@ -53,11 +53,9 @@ def enhance_surface(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%、彩度1.10
-        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.28))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
-        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
-        enhanced = ImageEnhance.Color(enhanced).enhance(1.10)
+        enhanced = img.point(make_white_boost_lut(gamma=0.72, boost_strength=0.20))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.08)
+        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.06)
     else:
         enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.28))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.12)
@@ -74,10 +72,8 @@ def enhance_side(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%、彩度+20%
-        enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.25))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
-        enhanced = ImageEnhance.Color(enhanced).enhance(1.20)
+        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
     else:
         enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
@@ -92,10 +88,8 @@ def enhance_corner(img: Image.Image) -> Image.Image:
         enhanced = img.point(make_white_boost_lut(gamma=0.92, boost_strength=0.15))
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%、彩度+20%
-        enhanced = img.point(make_white_boost_lut(gamma=0.58, boost_strength=0.25))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
-        enhanced = ImageEnhance.Color(enhanced).enhance(1.20)
+        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
     else:
         enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
@@ -111,11 +105,9 @@ def enhance_standard(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.05)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.05)
     elif color_cat == "brown":
-        # ★ブラウン強化：明るさ+20%で暗さ改善
-        enhanced = img.point(make_white_boost_lut(gamma=0.55, boost_strength=0.25))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.20)
+        enhanced = img.point(make_white_boost_lut(gamma=0.60, boost_strength=0.22))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
-        enhanced = ImageEnhance.Color(enhanced).enhance(1.12)
     else:
         enhanced = img.point(make_white_boost_lut(gamma=0.60, boost_strength=0.22))
         enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
