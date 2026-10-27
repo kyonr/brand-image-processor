@@ -43,7 +43,7 @@ def make_white_boost_lut(gamma: float, boost_strength: float = 0.25) -> list[int
         lut.append(val)
     return lut * 3
 
-# === 1. 表面・裏面用補正 ===
+# === 1. 表面・裏面用補正（変更なし） ===
 def enhance_surface(img: Image.Image) -> Image.Image:
     img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     img = img.convert("RGB")
@@ -62,40 +62,40 @@ def enhance_surface(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
     return enhanced.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2))
 
-# === 2. 側面用補正 ===
+# === 2. 側面用補正（★白光り防止用にマイルド調整） ===
 def enhance_side(img: Image.Image) -> Image.Image:
     img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     img = img.convert("RGB")
     color_cat = get_item_color_category(img)
     if color_cat == "black":
-        enhanced = img.point(make_white_boost_lut(gamma=0.82, boost_strength=0.15))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.14)
-        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.15)
+        enhanced = img.point(make_white_boost_lut(gamma=0.90, boost_strength=0.08))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.04)
+        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.08)
     elif color_cat == "brown":
-        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
+        enhanced = img.point(make_white_boost_lut(gamma=0.68, boost_strength=0.12))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.04)
     else:
-        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
+        enhanced = img.point(make_white_boost_lut(gamma=0.68, boost_strength=0.12))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.04)
     return enhanced.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2))
 
-# === 3. 角スレ用補正 ===
+# === 3. 角スレ用補正（★白光り防止用にマイルド調整） ===
 def enhance_corner(img: Image.Image) -> Image.Image:
     img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     img = img.convert("RGB")
     color_cat = get_item_color_category(img)
     if color_cat == "black":
-        enhanced = img.point(make_white_boost_lut(gamma=0.92, boost_strength=0.15))
-        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
+        enhanced = img.point(make_white_boost_lut(gamma=0.95, boost_strength=0.08))
+        enhanced = ImageEnhance.Contrast(enhanced).enhance(1.10)
     elif color_cat == "brown":
-        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
+        enhanced = img.point(make_white_boost_lut(gamma=0.68, boost_strength=0.12))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.04)
     else:
-        enhanced = img.point(make_white_boost_lut(gamma=0.62, boost_strength=0.22))
-        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.06)
+        enhanced = img.point(make_white_boost_lut(gamma=0.68, boost_strength=0.12))
+        enhanced = ImageEnhance.Brightness(enhanced).enhance(1.04)
     return enhanced.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2))
 
-# === 4. 標準補正（内側・ポケット用） ===
+# === 4. 標準補正（内側・ポケット用/変更なし） ===
 def enhance_standard(img: Image.Image) -> Image.Image:
     img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     img = img.convert("RGB")
@@ -114,7 +114,7 @@ def enhance_standard(img: Image.Image) -> Image.Image:
         enhanced = ImageEnhance.Contrast(enhanced).enhance(1.04)
     return enhanced.filter(ImageFilter.UnsharpMask(radius=1.2, percent=120, threshold=2))
 
-# === 5. 金具・刻印・シリアル用 ===
+# === 5. 金具・刻印・シリアル用（変更なし） ===
 def enhance_hardware(img: Image.Image) -> Image.Image:
     img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
     img = img.convert("RGB")
@@ -167,54 +167,38 @@ def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
         collage.paste(crop_center(img, cell_w, cell_h), (MARGIN, MARGIN + idx * (cell_h + GAP)))
     return collage
 
-# ★★★ 空白（隙間）を一切作らない高密度スマートグリッド ★★★
 def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image.Image:
     if not images:
         return None
     n = len(images)
     collage = Image.new("RGB", (target_size, target_size), (255, 255, 255))
 
-    # 1枚
     if n == 1:
         return crop_center(images[0], target_size, target_size)
-
-    # 2枚（左右分割）
     elif n == 2:
         cell_w = (target_size - MARGIN * 2 - GAP) // 2
         cell_h = target_size - MARGIN * 2
         collage.paste(crop_center(images[0], cell_w, cell_h), (MARGIN, MARGIN))
         collage.paste(crop_center(images[1], cell_w, cell_h), (MARGIN + cell_w + GAP, MARGIN))
-
-    # 3枚（上1枚、下2枚）
     elif n == 3:
         h_half = (target_size - MARGIN * 2 - GAP) // 2
-        # 上段：1枚（幅広）
         w_top = target_size - MARGIN * 2
         collage.paste(crop_center(images[0], w_top, h_half), (MARGIN, MARGIN))
-        # 下段：2枚
         w_bottom = (target_size - MARGIN * 2 - GAP) // 2
         y_bottom = MARGIN + h_half + GAP
         collage.paste(crop_center(images[1], w_bottom, h_half), (MARGIN, y_bottom))
         collage.paste(crop_center(images[2], w_bottom, h_half), (MARGIN + w_bottom + GAP, y_bottom))
-
-    # 4枚（2x2）
     elif n == 4:
         return make_2x2_grid(images)
-
-    # 5枚（上2枚、下3枚）
     elif n == 5:
         h_half = (target_size - MARGIN * 2 - GAP) // 2
-        # 上段：2枚
         w_top = (target_size - MARGIN * 2 - GAP) // 2
         for i in range(2):
             collage.paste(crop_center(images[i], w_top, h_half), (MARGIN + i * (w_top + GAP), MARGIN))
-        # 下段：3枚
         w_bottom = (target_size - MARGIN * 2 - GAP * 2) // 3
         y_bottom = MARGIN + h_half + GAP
         for i in range(3):
             collage.paste(crop_center(images[2 + i], w_bottom, h_half), (MARGIN + i * (w_bottom + GAP), y_bottom))
-
-    # 6枚（2行3列）
     elif n == 6:
         cols, rows = 3, 2
         cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
@@ -222,21 +206,15 @@ def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image
         for idx, img in enumerate(images[:6]):
             r, c = idx // cols, idx % cols
             collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
-
-    # 7枚（上3枚、下4枚）
     elif n == 7:
         h_half = (target_size - MARGIN * 2 - GAP) // 2
-        # 上段：3枚
         w_top = (target_size - MARGIN * 2 - GAP * 2) // 3
         for i in range(3):
             collage.paste(crop_center(images[i], w_top, h_half), (MARGIN + i * (w_top + GAP), MARGIN))
-        # 下段：4枚
         w_bottom = (target_size - MARGIN * 2 - GAP * 3) // 4
         y_bottom = MARGIN + h_half + GAP
         for i in range(4):
             collage.paste(crop_center(images[3 + i], w_bottom, h_half), (MARGIN + i * (w_bottom + GAP), y_bottom))
-
-    # 8枚（2行4列）
     elif n == 8:
         cols, rows = 4, 2
         cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
@@ -244,8 +222,6 @@ def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image
         for idx, img in enumerate(images[:8]):
             r, c = idx // cols, idx % cols
             collage.paste(crop_center(img, cell_w, cell_h), (MARGIN + c * (cell_w + GAP), MARGIN + r * (cell_h + GAP)))
-
-    # 9枚（3行3列）
     else:
         cols, rows = 3, 3
         cell_w = (target_size - MARGIN * 2 - GAP * (cols - 1)) // cols
