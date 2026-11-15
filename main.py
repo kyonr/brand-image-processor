@@ -30,6 +30,14 @@ def sanitize_folder_name(name: str) -> str:
     return cleaned[:80] if cleaned else "新規商品"
 
 
+def natural_sort_key(filename: str):
+    base = os.path.basename(filename)
+    return [
+        int(text) if text.isdigit() else text.lower()
+        for text in re.split(r"(\d+)", base)
+    ]
+
+
 @app.post("/prepare-listing")
 async def prepare_listing(request: Request):
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -58,7 +66,7 @@ async def prepare_listing(request: Request):
     info_text = ""
     image_entries = []
 
-    for entry in sorted(zip_file.namelist()):
+    for entry in sorted(zip_file.namelist(), key=natural_sort_key):
         base_name = os.path.basename(entry)
         if not base_name or base_name.startswith(".") or "__MACOSX" in entry:
             continue
@@ -95,9 +103,7 @@ async def prepare_listing(request: Request):
 
         base64_images.append(base64.b64encode(jpeg_bytes).decode("utf-8"))
         if len(image_parts) < 10:
-            image_parts.append(
-                f"【写真{idx + 1}枚目】"
-            )
+            image_parts.append(f"【写真{idx + 1}枚目】")
             image_parts.append(
                 types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg")
             )
