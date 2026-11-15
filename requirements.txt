@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+pillow
 google-genai
-Pillow
-python-multipart
+pydantic
+requests
