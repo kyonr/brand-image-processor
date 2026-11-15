@@ -1,15 +1,22 @@
 import io
 import os
+import re
+import json
+import base64
 import zipfile
 import gc
+import requests
 from fastapi import FastAPI, HTTPException, Request, Response
 from PIL import Image, ImageOps
+from pydantic import BaseModel, Field
+from google import genai
+from google.genai import types
 
 app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"status": "Brand Image Processor API is running (Layout Only)"}
+    return {"status": "Brand Image & Listing Processor API is running"}
 
 MARGIN = 6
 GAP = 6
@@ -59,7 +66,6 @@ def make_stacked_vertical(images: list[Image.Image]) -> Image.Image:
         collage.paste(crop_center(img, cell_w, cell_h), (MARGIN, MARGIN + idx * (cell_h + GAP)))
     return collage
 
-# 空白なし可変スマートグリッド
 def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image.Image:
     if not images:
         return None
@@ -125,6 +131,9 @@ def make_smart_grid(images: list[Image.Image], target_size: int = 1000) -> Image
 
     return collage
 
+# ==========================================
+# ① 既存の画像結合用エンドポイント（そのまま維持）
+# ==========================================
 @app.post("/process-images")
 async def process_images(request: Request):
     try:
@@ -243,3 +252,178 @@ async def process_images(request: Request):
             media_type="application/zip",
             headers={"Content-Disposition": "attachment; filename=processed_images.zip"}
         )
+
+# ==========================================
+# ② 新しく追加する「文章生成＆Drive保存」エンドポイント
+# ==========================================
+class MercariListing(BaseModel):
+    title: str = Field(description="メルカリ用の商品タイトル（全角・半角問わず必ず40文字以内・34〜40文字が理想）")
+    description: str = Field(description="メルカリ用の商品説明文（絵文字・スペース・改行・管理番号を含め全体で必ず850文字以内・700〜820文字がベスト）")
+
+@app.post("/prepare-listing")
+async def prepare_listing(request: Request):
+    try:
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="No data")
+
+        item_text = ""
+        images = []
+
+        # 1. ZIPからテキスト(info.txt)と画像(最大20枚)を取り出す
+        with zipfile.ZipFile(io.BytesIO(body)) as z:
+            for filename in sorted(z.namelist()):
+                if filename.startswith("__MACOSX") or filename.startswith("."):
+                    continue
+                if filename.endswith(".txt"):
+                    item_text = z.read(filename).decode("utf-8").strip()
+                elif filename.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    img = Image.open(io.BytesIO(z.read(filename))).convert("RGB")
+                    images.append(img)
+
+        if not images:
+            raise HTTPException(status_code=400, detail="No images found in ZIP")
+
+        target_images = images[:20]
+
+        # 2. Gemini APIで指定テンプレート通りにタイトルと説明文を生成
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+        prompt = f"""
+あなたは中古ブランド品リペア・販売のプロの出品アシスタントです。
+入力された「商品画像（1枚目〜{len(target_images)}枚目）」および「基本情報（ブランド・モデル・状態ランク・管理番号など）」をもとに、以下の厳格なルールに従って【メルカリ用タイトル】と【商品説明文】を作成してください。
+
+【基本情報】
+{item_text}
+
+---
+
+### 1. メルカリ用タイトル作成ルール
+- **文字数制限**：**全角・半角問わず必ず40文字以内**に収めること（34〜40文字が理想）。
+- **構成フォーマット**：`☆状態ランク☆ブランド名 アイテム名 モデル・ライン名 カラーや特徴`
+- **作成のポイント**：
+  * 冒頭に必ず `☆極美品☆` `☆未使用に近い☆` `☆箱付極美品☆` `☆箱付美品☆` などの状態ランクを入れる。
+  * 句読点や不要な記号は使わず、検索されやすいSEOキーワード（ブランド名、アイテム種別、ライン名、モデル名、色など）をスペース区切りで詰め込む。
+- **出力例**：
+  * `☆極美品☆グッチ ショルダーバッグ オフィディア GGスプリーム シェリーライン`（40文字）
+  * `☆未使用に近い☆セリーヌ 折財布 ファインストラップウォレット トリオンフ`（37文字）
+  * `☆箱付極美品☆ロエベ アナグラム トライフォールドウォレット ピンクベージュ`（38文字）
+
+---
+
+### 2. 商品説明文作成ルール
+- **文字数制限**：絵文字・スペース・改行・管理番号を含め、**全体で必ず850文字以内**（700〜820文字程度がベスト）に収めること。
+- **項目・記載の禁止ルール（厳守）**：
+  * **商品詳細欄に「素材」の項目（例：`・素 材 ：レザー`）は作らないこと**（※冒頭の商品紹介文や状態説明の文章中で「レザー」などのワードを自然に使用するのはOK）。
+  * **「原産国」は一切記載しないこと**（商品詳細欄の `・原産国 ：イタリア` などの項目はもちろん、本文中でも `Made in Italy / Spain` 等の記載はしない）。
+- **画像解析と反映**：
+  * 添付された画像（各画像に付与された「写真〇枚目」の番号）から「シリアルナンバー」「付属品の有無」「角スレ・汚れ・金具の傷などのコンディション」を正確に読み取り、該当する写真番号（例：`（写真9枚目右下参照）`）を記載すること。
+  * ダメージがある場合は隠さず誠実に記載しつつ、「ご使用時には目立たない程度です✨」「ご使用上全く問題ございません✨」と安心感を与える表現でフォローすること。
+- **冒頭紹介文のルール**：
+  * 最初の挨拶後の商品紹介3行は、合計100文字以内を目安に簡潔かつ魅力的にまとめること。
+
+---
+
+### 3. 商品説明文の固定テンプレート（厳守）
+
+以下の改行・絵文字・見出しのレイアウトを完全に再現して出力してください。
+
+⭐️鑑定済み(正規品)商品のみのお取り扱い✨
+⭐️翌日中以内配送✨
+⭐️即購入OK✨
+
+
+[ブランド名]の[モデル名]のご紹介です✨
+[デザインや色・素材感などの魅力を1行で簡潔に]✨
+[使い勝手や状態の魅力を1行で簡潔に]✨
+
+
+⭐️商品詳細⭐️
+・ブランド：[英語表記] [カタカナ表記]
+・型 番 ：[型番がある場合のみ記載／なければ行ごと削除]
+・モデル ：[モデル名]
+・ライン ：[ライン名がある場合のみ記載／なければ行ごと削除]
+・ 色   ：[メインカラー] × [金具の色]
+・サイズ ：横幅約〇cm × 縦約〇cm × マチ約〇cm（※バッグの場合はショルダー長さ等も記載）
+・仕 様 ：[開閉方式、小銭入れ・札入れ・カードポケット・フリーポケット数など]
+・シリアル：[画像から読み取ったシリアルナンバー]（写真〇枚目参照）
+・付属品 ：[なし（本体のみ） または 箱、保存袋など（写真〇枚目参照）]
+
+
+⭐️商品状態⭐️
+✅外側
+✔︎ [外側の型崩れ・角擦れ・表面の状態などを記載]✨
+✅内側
+✔︎ [お札入れ・小銭入れ・ポケット内の汚れや使用感の有無を記載]✨
+✅金具・ファスナー（※アイテムに合わせて「✅金具」等に調整）
+✔︎ [ロゴ金具の輝きや、ファスナー・スナップボタンの動作状態を記載]✨
+
+
+⭐️ご注意点⭐️
+・出品に際し、クリーニングとメンテナンスを実施しております。
+・万が一偽物の場合は受取評価前に限り返品・返金対応させていただきます！
+
+
+⭐️最後に⭐️
+[商品の魅力の再アピールと購入を促す親しみやすい締めくくり]！^_^
+
+
+管理番号[指定された管理番号]
+"""
+
+        # Geminiに「写真1枚目」「写真2枚目」と番号を明示しながら画像を渡す
+        gemini_contents = [prompt]
+        for idx, img in enumerate(target_images):
+            gemini_contents.append(f"--- 写真{idx + 1}枚目 ---")
+            gemini_contents.append(img)
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=gemini_contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=MercariListing,
+                temperature=0.3,
+            ),
+        )
+
+        result_data = json.loads(response.text)
+        title = result_data["title"][:40]
+        description = result_data["description"][:850]
+
+        # 3. 画像をGASに送るためのデータ(Base64)に変換
+        encoded_images = []
+        for img in target_images:
+            img_buf = io.BytesIO()
+            img.save(img_buf, format="JPEG", quality=95)
+            b64_str = base64.b64encode(img_buf.getvalue()).decode("utf-8")
+            encoded_images.append(b64_str)
+
+        safe_folder_name = re.sub(r'[\\/:*?"<>|]', '_', item_text)[:50] or "名称未設定商品"
+
+        # 4. GASのWebアプリURLへデータを送信してドライブに保存
+        gas_url = os.environ["GAS_WEBAPP_URL"]
+        gas_payload = {
+            "folder_name": safe_folder_name,
+            "title": title,
+            "description": description,
+            "images": encoded_images
+        }
+
+        gas_res = requests.post(gas_url, json=gas_payload, allow_redirects=True, timeout=60)
+        gas_result = gas_res.json()
+
+        if gas_result.get("status") != "success":
+            raise HTTPException(status_code=500, detail=f"GAS Error: {gas_result.get('message')}")
+
+        # 5. iPhoneショートカットへ完了結果を返す
+        return {
+            "status": "success",
+            "folder_name": safe_folder_name,
+            "title": title,
+            "description": description,
+            "drive_url": gas_result.get("folderUrl", "")
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
