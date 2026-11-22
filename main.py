@@ -7,11 +7,46 @@ import zipfile
 from fastapi import FastAPI, HTTPException, Request, Response
 from google import genai
 from google.genai import types
-from PIL import Image, ImageOps
+from PIL import Image, ImageCms, ImageOps
 from pydantic import BaseModel, Field
 import requests
 
 app = FastAPI()
+
+try:
+    _SRGB_PROFILE = ImageCms.createProfile("sRGB")
+    _SRGB_BYTES = ImageCms.ImageCmsProfile(_SRGB_PROFILE).tobytes()
+except Exception:
+    _SRGB_PROFILE = None
+    _SRGB_BYTES = None
+
+
+def open_image_preserve_color(raw_bytes: bytes) -> Image.Image:
+    """元の色味・明るさ（Display P3等）を維持したままRGB画像として開く"""
+    img = Image.open(io.BytesIO(raw_bytes))
+    img = ImageOps.exif_transpose(img)
+    try:
+        icc_raw = img.info.get("icc_profile")
+        if icc_raw and _SRGB_PROFILE is not None:
+            src_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc_raw))
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            return ImageCms.profileToProfile(
+                img, src_profile, _SRGB_PROFILE, outputMode="RGB"
+            )
+    except Exception:
+        pass
+    return img.convert("RGB")
+
+
+def save_jpeg_preserve_color(img: Image.Image, quality: int = 95) -> bytes:
+    """色空間プロファイルを保持したままJPEGバイト列に変換する"""
+    buf = io.BytesIO()
+    if _SRGB_BYTES:
+        img.save(buf, format="JPEG", quality=quality, icc_profile=_SRGB_BYTES)
+    else:
+        img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
 
 
 class ListingOutput(BaseModel):
@@ -205,7 +240,7 @@ async def process_images(request: Request):
         with zipfile.ZipFile(io.BytesIO(body)) as z:
             for filename in z.namelist():
                 if not filename.startswith("__MACOSX") and not filename.startswith("."):
-                    img = Image.open(io.BytesIO(z.read(filename))).convert("RGB")
+                    img = open_image_preserve_color(z.read(filename))
                     images.append(img)
 
         if not images:
@@ -340,9 +375,7 @@ async def process_images(request: Request):
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
             for fname, img_obj in out.items():
                 if img_obj:
-                    img_buf = io.BytesIO()
-                    img_obj.save(img_buf, format="JPEG", quality=95)
-                    zf.writestr(fname, img_buf.getvalue())
+                    zf.writestr(fname, save_jpeg_preserve_color(img_obj, quality=95))
 
         gc.collect()
         zip_buf.seek(0)
@@ -433,15 +466,9 @@ async def prepare_listing(request: Request):
 
     for idx, entry in enumerate(image_entries):
         raw_img = zip_file.read(entry)
-        img = Image.open(io.BytesIO(raw_img))
-        img = ImageOps.exif_transpose(img)
-        if img.mode != "RGB":
-            img = img.convert("RGB")
+        img = open_image_preserve_color(raw_img)
         img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
-
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)
-        jpeg_bytes = buf.getvalue()
+        jpeg_bytes = save_jpeg_preserve_color(img, quality=88)
 
         base64_images.append(base64.b64encode(jpeg_bytes).decode("utf-8"))
         if idx < 10:
